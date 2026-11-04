@@ -1,0 +1,20 @@
+TYPE: EXAM
+TITLE: End Semester Examination Schedule - CS301 Operating Systems
+DATE: 2026-11-02
+DEADLINE: 2026-11-10
+ISSUER: Office of the Controller of Examinations
+PRIORITY_KEYS: mandatory, hall-ticket, end-semester
+COURSE_CODE: CS301
+EXAM_TYPE: End Semester Theory
+EXAM_DATE: 2026-11-16
+VENUE: Main Academic Block, Examination Hall A
+---
+All students registered for CS301 Operating Systems in the current semester are
+informed that the end semester theory examination will be held on 16 November 2026
+from 10:00 to 13:00 in Examination Hall A of the Main Academic Block.
+
+Hall tickets must be collected from the department office on or before
+10 November 2026. Students with attendance below 75 percent will not be issued a
+hall ticket unless their condonation request has been approved by the Head of
+Department. Entry to the examination hall without a valid hall ticket and college
+identity card is not permitted.

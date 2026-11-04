@@ -1,0 +1,20 @@
+# Compiled output
+*.class
+out/
+bin/
+build/
+*.jar
+
+# Runtime artefacts produced by CircularSync
+audit_logs/*
+!audit_logs/.gitkeep
+*.tmp
+
+# Editor and OS files
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db

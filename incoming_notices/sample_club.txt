@@ -1,0 +1,18 @@
+TYPE: CLUB
+TITLE: Hands-on Robotics Workshop - Line Following Robots
+DATE: 2026-11-04
+DEADLINE: 2026-11-25
+ISSUER: Robotics and Automation Club
+PRIORITY_KEYS: workshop, certificate, limited-seats
+CLUB_NAME: Robotics and Automation Club
+EVENT_DATE: 2026-11-29
+EVENT_VENUE: Innovation Lab, Second Floor, Engineering Block
+SEATS: 40
+---
+The Robotics and Automation Club invites students of all years to a one-day
+hands-on workshop on building line-following robots. Participants will assemble a
+chassis, wire infrared sensors and program a microcontroller during the session.
+
+Kits will be provided. Seats are limited to forty participants and will be
+allotted in order of registration. Participation certificates will be issued to
+everyone who completes the workshop.

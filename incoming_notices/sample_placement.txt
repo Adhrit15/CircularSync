@@ -1,0 +1,22 @@
+TYPE: PLACEMENT
+TITLE: Campus Recruitment Drive - Graduate Software Engineer
+DATE: 2026-11-03
+DEADLINE: 2026-11-08
+ISSUER: Training and Placement Cell
+PRIORITY_KEYS: registration, final-year, dream
+COMPANY: Northwind Systems Pvt. Ltd.
+ROLE: Graduate Software Engineer
+ELIGIBILITY: B.Tech CSE, IT and ECE (2027 batch), CGPA 7.0 and above, no active backlogs
+PACKAGE_LPA: 18.5
+MIN_CGPA: 7.0
+DRIVE_DATE: 2026-11-20
+---
+The Training and Placement Cell is pleased to announce an on-campus recruitment
+drive for the role of Graduate Software Engineer. The selection process consists
+of an online aptitude and coding assessment, two technical interviews and an HR
+discussion.
+
+Eligible final-year students must register on the placement portal before
+8 November 2026. Late registrations will not be accepted. Students who register
+are expected to attend every round; absence without prior intimation will be
+treated as per the placement policy.
