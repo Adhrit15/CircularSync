@@ -410,7 +410,8 @@
   <form class="box" id="adminForm">
     <h3 id="adminTitle">Admin sign-in</h3>
     <p>Uploading and deleting circulars is limited to the administrator. Everyone can view the board.</p>
-    <input type="password" id="adminInput" placeholder="Admin key" autocomplete="current-password" required>
+    <input type="password" id="adminInput" placeholder="Paste the admin key" autocomplete="off" spellcheck="false" required>
+    <p id="adminError" role="alert" style="color:var(--bad);margin:10px 0 0;font-size:12.5px"></p>
     <div class="row">
       <button type="button" class="btn" id="adminCancel">Cancel</button>
       <button type="submit" class="btn primary">Sign in</button>
@@ -498,6 +499,7 @@
   function openAdmin() {
     $('adminModal').classList.add('open');
     $('adminInput').value = '';
+    $('adminError').textContent = '';
     setTimeout(() => $('adminInput').focus(), 30);
   }
   function closeAdmin() { $('adminModal').classList.remove('open'); }
@@ -513,18 +515,42 @@
   });
   $('adminCancel').addEventListener('click', closeAdmin);
   $('adminModal').addEventListener('click', (e) => { if (e.target === $('adminModal')) closeAdmin(); });
+  /**
+   * Keys are copied from a terminal, so tolerate what comes along with them:
+   * the "Admin key (...):" label, quotes, and line breaks or spaces where the
+   * terminal wrapped the line. Generated keys never contain whitespace.
+   */
+  function cleanKey(raw) {
+    let key = String(raw || '');
+    const colon = key.lastIndexOf(':');
+    if (colon >= 0) key = key.slice(colon + 1);
+    return key.replace(/\s+/g, '').replace(/^["'`]+|["'`]+$/g, '');
+  }
   $('adminForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    adminKey = $('adminInput').value.trim();
+    const candidate = cleanKey($('adminInput').value);
+    $('adminError').textContent = '';
+    if (!candidate) return;
+    let accepted = false;
+    try {
+      const res = await fetch('/api/state', { cache: 'no-store', headers: { 'X-Admin-Key': candidate } });
+      accepted = res.ok && (await res.json()).isAdmin === true;
+    } catch (err) {
+      $('adminError').textContent = 'Could not reach the server. Check your connection and try again.';
+      return;
+    }
+    if (!accepted) {
+      $('adminError').textContent = 'That key was not accepted (' + candidate.length + ' characters received). '
+        + 'Copy only the key line printed under "Admin key" in the server window. '
+        + 'If the server was restarted, it printed a new key.';
+      $('adminInput').select();
+      return;
+    }
+    adminKey = candidate;
+    try { sessionStorage.setItem('cs-admin', adminKey); } catch (err) { /* ignore */ }
     closeAdmin();
     await refresh(true);
-    if (isAdmin) {
-      try { sessionStorage.setItem('cs-admin', adminKey); } catch (err) { /* ignore */ }
-      toast('ok', 'Signed in as admin', 'You can now upload and delete circulars');
-    } else {
-      adminKey = '';
-      toast('bad', 'Wrong admin key', 'The key was not accepted');
-    }
+    toast('ok', 'Signed in as admin', 'You can now upload and delete circulars');
   });
   function handleAuthError(res) {
     if (res.status === 401) {
@@ -816,9 +842,12 @@
     inflight = true;
     try {
       const params = new URLSearchParams(filters);
+      const keyUsed = adminKey;
       const res = await fetch('/api/state?' + params.toString(), { cache: 'no-store', headers: auth() });
       if (!res.ok) throw new Error(res.status);
       const s = await res.json();
+      // A poll that started before a sign-in or sign-out must not overwrite the new access state.
+      if (keyUsed !== adminKey) return;
       failures = 0;
       const accessChanged = adminRequired !== s.adminRequired || isAdmin !== s.isAdmin;
       adminRequired = s.adminRequired;

@@ -214,7 +214,10 @@ public final class Main {
             System.out.println("  Web portal running at " + url
                     + (isLoopback(options.host) ? "" : " (listening on " + options.host + ":" + portal.get().getPort() + ")"));
             if (options.generatedAdminKey != null) {
-                System.out.println("  Admin key (needed to upload or delete): " + options.generatedAdminKey);
+                System.out.println("  Admin key (needed to upload or delete). Copy the next line only:");
+                System.out.println();
+                System.out.println(options.generatedAdminKey);
+                System.out.println();
                 System.out.println("  Set CIRCULARSYNC_ADMIN_KEY to keep the same key across restarts.");
             } else if (resolveAdminKey(options) != null) {
                 System.out.println("  Uploads and deletions require the configured admin key.");
