@@ -5,10 +5,14 @@ import com.circularsync.model.Notice;
 import com.circularsync.service.AuditLogger;
 import com.circularsync.service.NoticeParserService;
 import com.circularsync.service.NoticeRegistry;
+import com.circularsync.web.FileActivityTracker;
+import com.circularsync.web.WebPortalServer;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.BindException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -19,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
@@ -27,6 +32,7 @@ import java.util.function.Supplier;
  * <pre>
  * java -cp out com.circularsync.main.Main scan
  * java -cp out com.circularsync.main.Main daemon [--duration 30]
+ * java -cp out com.circularsync.main.Main web [--port 8080]
  * java -cp out com.circularsync.main.Main query top 3
  * </pre>
  */
@@ -43,6 +49,7 @@ public final class Main {
             "  scan              parse every notice in the incoming directory once, print the board, exit",
             "  daemon            process existing notices, then watch the directory for new ones and",
             "                    open an interactive query shell (type 'help' inside it)",
+            "  web               like daemon, plus a browser portal for uploads and the live board",
             "  query <command>   scan once, then run a single query command and exit",
             "  help              show this text",
             "",
@@ -52,6 +59,9 @@ public final class Main {
             "  --threads <n>       worker thread count     (default: 4)",
             "  --duration <secs>   daemon only: run unattended for this long, then stop",
             "  --today <date>      override today's date (yyyy-MM-dd), for reproducible runs",
+            "  --port <n>          web only: portal port   (default: 8080)",
+            "  --webroot <path>    web only: portal files  (default: web)",
+            "  --no-browser        web only: do not open the portal in a browser",
             "",
             QueryConsole.HELP_TEXT);
 
@@ -91,7 +101,9 @@ public final class Main {
                 }
                 return runScan(options, List.of(String.join(" ", options.queryArgs)));
             case "daemon":
-                return runDaemon(options);
+                return runDaemon(options, false);
+            case "web":
+                return runDaemon(options, true);
             default:
                 throw new IllegalArgumentException("Unknown command '" + options.command + "'");
         }
@@ -129,11 +141,15 @@ public final class Main {
         }
     }
 
-    /** Continuous mode: watch the directory and serve queries until quit, Ctrl+C or --duration elapses. */
-    private static int runDaemon(Options options) throws IOException, InterruptedException {
+    /**
+     * Continuous mode: watch the directory and serve queries until quit, Ctrl+C or --duration
+     * elapses. With {@code withPortal} the web portal runs alongside the console.
+     */
+    private static int runDaemon(Options options, boolean withPortal) throws IOException, InterruptedException {
         NoticeRegistry registry = new NoticeRegistry();
         AuditLogger audit = new AuditLogger(options.logDirectory);
         DirectoryWatcherDaemon daemon = newDaemon(options, registry, audit);
+        AtomicReference<WebPortalServer> portal = new AtomicReference<>();
         CountDownLatch stopped = new CountDownLatch(1);
         Runnable shutdown = new Runnable() {
             private boolean done;
@@ -144,6 +160,10 @@ public final class Main {
                     return;
                 }
                 done = true;
+                WebPortalServer server = portal.get();
+                if (server != null) {
+                    server.close();
+                }
                 daemon.close();
                 try {
                     writeBoardSnapshot(audit, registry);
@@ -162,10 +182,31 @@ public final class Main {
                 + " reference date " + options.today.get());
         daemon.addIndexListener(notice -> System.out.println(System.lineSeparator()
                 + ">> New notice indexed: " + notice.formatSummary()));
+        if (withPortal) {
+            FileActivityTracker tracker = new FileActivityTracker();
+            daemon.addProcessingListener(tracker);
+            WebPortalServer server = new WebPortalServer(options.port, options.webRoot, options.demoDirectory,
+                    registry, daemon, tracker, audit, options.today);
+            try {
+                server.start();
+            } catch (BindException e) {
+                throw new IllegalArgumentException("port " + options.port + " is already in use; pass --port <n>");
+            }
+            portal.set(server);
+        }
         daemon.start();
         daemon.awaitIdle(Duration.ofSeconds(30));
         System.out.println("CircularSync daemon watching " + daemon.getWatchDirectory()
                 + " with " + options.threads + " worker thread(s). " + registry.size() + " notice(s) active.");
+        if (portal.get() != null) {
+            String url = portal.get().getUrl();
+            System.out.println();
+            System.out.println("  Web portal running at " + url);
+            System.out.println();
+            if (options.openBrowser) {
+                openBrowser(url);
+            }
+        }
 
         QueryConsole console = new QueryConsole(registry, daemon, System.out);
         if (options.durationSeconds > 0) {
@@ -206,6 +247,19 @@ public final class Main {
         return 0;
     }
 
+    private static void openBrowser(String url) {
+        try {
+            if (java.awt.Desktop.isDesktopSupported()
+                    && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.BROWSE)) {
+                java.awt.Desktop.getDesktop().browse(URI.create(url));
+                return;
+            }
+        } catch (IOException | RuntimeException e) {
+            // fall through to the manual hint
+        }
+        System.out.println("  Open " + url + " in your browser.");
+    }
+
     private static DirectoryWatcherDaemon newDaemon(Options options, NoticeRegistry registry, AuditLogger audit) {
         return new DirectoryWatcherDaemon(options.watchDirectory, new NoticeParserService(options.today),
                 registry, audit, options.threads);
@@ -231,6 +285,10 @@ public final class Main {
         int threads = 4;
         long durationSeconds;
         Supplier<LocalDate> today = LocalDate::now;
+        int port = 8080;
+        Path webRoot = Paths.get("web");
+        Path demoDirectory = Paths.get("demo");
+        boolean openBrowser = true;
 
         static Options parse(String[] args) {
             Options options = new Options();
@@ -249,6 +307,15 @@ public final class Main {
                         break;
                     case "--duration":
                         options.durationSeconds = integer(value(args, ++i, arg), arg, 1, 86_400);
+                        break;
+                    case "--port":
+                        options.port = integer(value(args, ++i, arg), arg, 0, 65_535);
+                        break;
+                    case "--webroot":
+                        options.webRoot = Paths.get(value(args, ++i, arg));
+                        break;
+                    case "--no-browser":
+                        options.openBrowser = false;
                         break;
                     case "--today":
                         String date = value(args, ++i, arg);

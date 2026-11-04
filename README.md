@@ -3,7 +3,7 @@
 CircularSync is a campus circular parsing daemon and query system. It watches a
 directory for notice files (`.txt` or `.md`), parses and validates them on a
 worker thread pool, ranks them by urgency and priority, and answers queries from
-the command line. Every outcome is written to an audit log.
+the command line or a local web portal. Every outcome is written to an audit log.
 
 ## Requirements
 
@@ -26,6 +26,7 @@ only. If `java` is not on your PATH, set `JAVA_HOME` first.
 java -cp out com.circularsync.main.Main scan
 java -cp out com.circularsync.main.Main daemon
 java -cp out com.circularsync.main.Main daemon --duration 30
+java -cp out com.circularsync.main.Main web
 java -cp out com.circularsync.main.Main query top 3
 java -cp out com.circularsync.main.Main query search hall-ticket
 ```
@@ -33,6 +34,19 @@ java -cp out com.circularsync.main.Main query search hall-ticket
 Options: `--dir <path>` (default `incoming_notices`), `--logs <path>` (default
 `audit_logs`), `--threads <n>` (default 4), `--duration <seconds>` (daemon
 only), `--today <yyyy-MM-dd>` (fix the reference date).
+
+## Web portal
+
+`web` runs the daemon plus a browser portal at http://localhost:8080 (bound to
+this computer only) and opens it in your browser. The **Uploads** tab accepts
+drag-and-drop uploads and one-click demo notices and shows the live status of
+every file the daemon sees. The **Notice Board** tab shows the ranked output
+with search, category and deadline filters, notice details and a live pipeline
+activity feed. Uploads are written into `incoming_notices` and go through the
+same WatchService and worker pool as any other file.
+
+Portal options: `--port <n>` (default 8080), `--webroot <path>` (default
+`web`), `--no-browser`. On Windows: `run.bat web --today 2026-11-04`.
 
 Query commands, available in the daemon shell and through `query`: `list`,
 `top <n>`, `category <EXAM|PLACEMENT|CLUB>`, `search <words...>`, `due <days>`,
@@ -73,9 +87,12 @@ src/com/circularsync/
   interfaces/  Processable
   exceptions/  CircularSyncException, InvalidNoticeFormatException, ExpiredDeadlineException
   service/     NoticeParserService, NoticeRegistry, AuditLogger
-  daemon/      DirectoryWatcherDaemon
+  daemon/      DirectoryWatcherDaemon, ProcessingEvent, ProcessingListener
+  web/         WebPortalServer, FileActivityTracker, JsonWriter
   main/        Main, QueryConsole
 test/com/circularsync/test/CircularSyncTestSuite.java
+web/index.html      the portal page
+demo/               notices to drop in during a demo
 incoming_notices/   sample notices
 audit_logs/         audit.log and processed_notices.txt (generated at runtime)
 ```

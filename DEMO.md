@@ -21,6 +21,40 @@ Always pass `--today 2026-11-04` in the commands below. The sample notices
 have November 2026 deadlines; fixing the date keeps the scores and rankings
 exactly as shown here, whatever day you present.
 
+## Option A: web portal demo (recommended)
+
+```
+.\run.bat web --today 2026-11-04
+```
+
+Your browser opens http://localhost:8080. Keep the terminal visible beside it:
+every notice the portal shows is also printed there, which proves both views
+come from the same daemon.
+
+1. **Uploads tab.** The three sample notices already show as *Found in folder*
+   and *Indexed*. Say: "The daemon scanned the folder at start-up with four
+   worker threads."
+2. **Click "Drop in" next to `1_hackathon.md`.** A row appears as
+   *Processing*, flips to *Indexed* with score 48, and a toast confirms it.
+   (You can also drag any `.txt` or `.md` file onto the drop zone.)
+3. **Drop `2_urgent_reexam.txt`**, then open the **Notice Board** tab. The
+   re-exam sits at **#1 with score 100**, marked *Due tomorrow*.
+4. **Back on Uploads, drop `3_broken_notice.txt` and `4_expired_notice.txt`.**
+   They show *Invalid format* and *Expired* with the exact reason. The Rejected
+   counter rises and nothing reaches the board.
+5. **Notice Board:** type `hall-ticket` or `robotics` in search, click the
+   Exam / Placement / Club filters, pick *Due in 2 days*, and click any card to
+   open its full details. The *Pipeline activity* feed on the right shows each
+   event as it happens.
+6. **Uploads: click Delete** on `1_hackathon.md`. It becomes *Withdrawn* and
+   leaves the board.
+
+To stop, type `quit` in the terminal (or press Ctrl+C and answer `Y`). To
+reset, delete the demo rows with the Delete buttons before quitting, or remove
+the demo files from `incoming_notices` afterwards.
+
+## Option B: terminal-only demo
+
 ## 1. Start the daemon
 
 ```

@@ -12,12 +12,19 @@ import com.circularsync.service.AuditLogger;
 import com.circularsync.service.NoticeParserService;
 import com.circularsync.service.NoticeRegistry;
 import com.circularsync.service.NoticeRegistry.RegistrationResult;
+import com.circularsync.web.FileActivityTracker;
+import com.circularsync.web.WebPortalServer;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -68,6 +75,7 @@ public final class CircularSyncTestSuite {
         test("registry survives concurrent registration", this::concurrentRegistration);
         test("daemon processes existing files through the worker pool", this::daemonInitialScan);
         test("daemon reacts to WatchService create and delete events", this::daemonWatchEvents);
+        test("web portal uploads, tracks and serves the board", this::webPortalEndToEnd);
 
         System.out.println();
         System.out.println(passed + " passed, " + failures.size() + " failed");
@@ -343,6 +351,72 @@ public final class CircularSyncTestSuite {
         } finally {
             deleteTree(dir);
             deleteTree(logs);
+        }
+    }
+
+    private void webPortalEndToEnd() throws Exception {
+        Path dir = Files.createTempDirectory("circularsync-web");
+        Path logs = Files.createTempDirectory("circularsync-logs");
+        Path demo = Files.createTempDirectory("circularsync-demo");
+        HttpClient http = HttpClient.newHttpClient();
+        try {
+            write(demo.resolve("demo_club.txt"), club("2026-12-01"));
+            NoticeRegistry registry = new NoticeRegistry();
+            FileActivityTracker tracker = new FileActivityTracker();
+            try (AuditLogger audit = new AuditLogger(logs);
+                 DirectoryWatcherDaemon daemon = new DirectoryWatcherDaemon(dir, parser, registry, audit, 2);
+                 WebPortalServer portal = new WebPortalServer(0, Paths.get("web"), demo, registry, daemon,
+                         tracker, audit, () -> TODAY)) {
+                daemon.addProcessingListener(tracker);
+                portal.start();
+                daemon.start();
+                String base = portal.getUrl();
+
+                HttpResponse<String> page = http.send(HttpRequest.newBuilder(URI.create(base)).build(),
+                        HttpResponse.BodyHandlers.ofString());
+                checkEquals(200, page.statusCode(), "portal page");
+                check(page.body().contains("CircularSync"), "portal page content");
+
+                checkEquals(202, post(http, base + "api/upload?name=web_exam.txt", exam("Web upload", "2026-11-20", "mandatory")), "upload accepted");
+                checkEquals(202, post(http, base + "api/upload?name=web_broken.txt", "TYPE: EXAM\n---\nbody\n"), "broken upload accepted");
+                checkEquals(400, post(http, base + "api/upload?name=..%2Fescape.txt", "x"), "path traversal refused");
+                checkEquals(415, post(http, base + "api/upload?name=report.pdf", "x"), "unsupported type refused");
+                checkEquals(202, post(http, base + "api/demo?name=demo_club.txt", ""), "demo drop accepted");
+
+                waitUntil(() -> registry.size() == 2, Duration.ofSeconds(20), "uploaded and demo notices indexed");
+                String state = http.send(HttpRequest.newBuilder(URI.create(base + "api/state")).build(),
+                        HttpResponse.BodyHandlers.ofString()).body();
+                waitUntil(() -> get(http, base + "api/state").contains("REJECTED_FORMAT"),
+                        Duration.ofSeconds(20), "broken upload tracked as rejected");
+                check(state.contains("\"source\":\"UPLOAD\"") && state.contains("\"source\":\"DEMO\""), "sources tracked");
+                check(get(http, base + "api/state?category=CLUB").contains("Robotics Workshop"), "category filter");
+                check(!get(http, base + "api/state?q=robotics").contains("Web upload"), "search filter");
+
+                HttpResponse<String> deleted = http.send(HttpRequest.newBuilder(URI.create(base + "api/files?name=web_exam.txt"))
+                        .DELETE().build(), HttpResponse.BodyHandlers.ofString());
+                checkEquals(200, deleted.statusCode(), "delete through portal");
+                waitUntil(() -> registry.size() == 1, Duration.ofSeconds(20), "deleted upload withdrawn");
+            }
+        } finally {
+            deleteTree(dir);
+            deleteTree(logs);
+            deleteTree(demo);
+        }
+    }
+
+    private static int post(HttpClient http, String url, String body) throws IOException, InterruptedException {
+        return http.send(HttpRequest.newBuilder(URI.create(url)).POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString()).statusCode();
+    }
+
+    private static String get(HttpClient http, String url) {
+        try {
+            return http.send(HttpRequest.newBuilder(URI.create(url)).build(), HttpResponse.BodyHandlers.ofString()).body();
+        } catch (IOException e) {
+            return "";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "";
         }
     }
 

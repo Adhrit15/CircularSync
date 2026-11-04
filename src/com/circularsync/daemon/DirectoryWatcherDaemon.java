@@ -81,6 +81,7 @@ public class DirectoryWatcherDaemon implements AutoCloseable {
     private final ConcurrentHashMap<Path, ReentrantLock> pathLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Path, FileFingerprint> lastProcessed = new ConcurrentHashMap<>();
     private final List<Consumer<Notice>> indexListeners = new CopyOnWriteArrayList<>();
+    private final List<ProcessingListener> processingListeners = new CopyOnWriteArrayList<>();
     private final Statistics statistics = new Statistics();
 
     private final Object idleMonitor = new Object();
@@ -292,11 +293,14 @@ public class DirectoryWatcherDaemon implements AutoCloseable {
     private void handleDeletion(Path file) {
         Path normalized = file.toAbsolutePath().normalize();
         lastProcessed.remove(normalized);
-        Optional<Notice> removed = registry.removeBySource(normalized.getFileName().toString());
+        String name = normalized.getFileName().toString();
+        Optional<Notice> removed = registry.removeBySource(name);
         removed.ifPresent(notice -> {
             statistics.removed.incrementAndGet();
-            audit.info("REMOVED", notice.getId() + " withdrawn because " + normalized.getFileName() + " was deleted");
+            audit.info("REMOVED", notice.getId() + " withdrawn because " + name + " was deleted");
         });
+        fire(name, ProcessingEvent.Outcome.REMOVED, removed.orElse(null),
+                removed.isPresent() ? "File deleted; notice withdrawn from the board" : "File deleted", -1);
     }
 
     // ------------------------------------------------------------------
@@ -365,10 +369,16 @@ public class DirectoryWatcherDaemon implements AutoCloseable {
                     for (Consumer<Notice> listener : indexListeners) {
                         listener.accept(notice);
                     }
+                    fire(name, result == RegistrationResult.ADDED ? ProcessingEvent.Outcome.INDEXED
+                                    : ProcessingEvent.Outcome.REINDEXED, notice,
+                            "Indexed with priority score " + notice.getPriorityScore() + " in " + micros + " us",
+                            fingerprint.get().size);
                     break;
                 case DUPLICATE:
                     statistics.duplicateContent.incrementAndGet();
                     audit.info("DUPLICATE", name + " has the same content as already indexed " + notice.getId());
+                    fire(name, ProcessingEvent.Outcome.DUPLICATE, notice,
+                            "Same content as already indexed notice " + notice.getId(), fingerprint.get().size);
                     break;
                 default:
                     throw new IllegalStateException("Unhandled result " + result);
@@ -377,16 +387,19 @@ public class DirectoryWatcherDaemon implements AutoCloseable {
             statistics.rejectedInvalid.incrementAndGet();
             withdrawStaleVersion(name);
             audit.warn("REJECTED_FORMAT", e.getMessage());
+            fire(name, ProcessingEvent.Outcome.REJECTED_FORMAT, null, e.getMessage(), sizeOf(file));
         } catch (ExpiredDeadlineException e) {
             statistics.rejectedExpired.incrementAndGet();
             withdrawStaleVersion(name);
             audit.warn("REJECTED_EXPIRED", e.getMessage());
+            fire(name, ProcessingEvent.Outcome.REJECTED_EXPIRED, null, e.getMessage(), sizeOf(file));
         } catch (NoSuchFileException e) {
             lastProcessed.remove(file);
         } catch (IOException e) {
             statistics.ioErrors.incrementAndGet();
             lastProcessed.remove(file); // allow a retry on the next event
             audit.error("IO_ERROR", name + ": " + e);
+            fire(name, ProcessingEvent.Outcome.IO_ERROR, null, e.toString(), sizeOf(file));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -422,6 +435,28 @@ public class DirectoryWatcherDaemon implements AutoCloseable {
         return Optional.ofNullable(previous);
     }
 
+    private void fire(String fileName, ProcessingEvent.Outcome outcome, Notice notice, String message, long size) {
+        if (processingListeners.isEmpty()) {
+            return;
+        }
+        ProcessingEvent event = new ProcessingEvent(fileName, outcome, notice, message, size);
+        for (ProcessingListener listener : processingListeners) {
+            try {
+                listener.onProcessed(event);
+            } catch (RuntimeException e) {
+                audit.error("LISTENER_FAULT", listener.getClass().getSimpleName() + ": " + e);
+            }
+        }
+    }
+
+    private static long sizeOf(Path file) {
+        try {
+            return Files.size(file);
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
     private void markDone() {
         synchronized (idleMonitor) {
             inFlight--;
@@ -438,6 +473,11 @@ public class DirectoryWatcherDaemon implements AutoCloseable {
     /** Registers a callback invoked on a worker thread whenever a notice is (re)indexed. */
     public void addIndexListener(Consumer<Notice> listener) {
         indexListeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    /** Registers a callback invoked for every pipeline outcome, including rejections and removals. */
+    public void addProcessingListener(ProcessingListener listener) {
+        processingListeners.add(Objects.requireNonNull(listener, "listener"));
     }
 
     public Statistics getStatistics() {
