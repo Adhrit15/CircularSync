@@ -1,0 +1,876 @@
+CIRCULARSYNC: AN AUTOMATED CAMPUS CIRCULAR PARSING DAEMON AND QUERY SYSTEM
+
+A Project Report on the Design and Implementation of a Concurrent,
+File-System-Driven Notice Management Engine in Java
+
+Submitted in partial fulfilment of the requirements of the course
+Object-Oriented Programming and Systems Development with Java
+
+November 2026
+
+
+ABSTRACT
+
+Colleges distribute a large volume of circulars every semester: examination
+timetables, hall-ticket instructions, placement drive registrations, club
+events and administrative announcements. These circulars arrive through many
+unstructured channels and are rarely ranked by urgency, so students routinely
+miss deadlines that carry academic or career consequences. This report
+presents CircularSync, a Java application that addresses the problem by
+treating every circular as a structured document dropped into a monitored
+directory. A daemon built on the Java NIO WatchService detects new files in
+real time, a fixed-size thread pool fed by a blocking queue parses and
+validates them concurrently, and a thread-safe in-memory registry keeps every
+active notice sorted by a computed priority score and deadline. Notices are
+modelled through an abstract base class with three specialised subclasses,
+an interface that defines the processing contract, and a hierarchy of custom
+checked exceptions that make every failure explicit. All outcomes are written
+to an asynchronous audit log. The system was compiled with the Java compiler
+targeting release 17, verified with an eighteen-case automated test suite and
+live runs against sample notices, and placed under Git version control. The
+report describes the problem, the architecture, the object-oriented design,
+the concurrency model, the file-management engine, the error-handling
+strategy, the code structure, the verification results and the directions in
+which the system can be extended.
+
+
+CHAPTER 1: INTRODUCTION AND PROBLEM STATEMENT
+
+1.1 Background
+
+An engineering college of moderate size issues several hundred circulars in
+an academic year. The Office of the Controller of Examinations publishes
+schedules, seating arrangements and hall-ticket instructions. The Training and
+Placement Cell announces recruitment drives with tight registration windows.
+Student clubs advertise workshops, hackathons and competitions. Each office
+works independently and chooses its own medium: a scanned page pinned to a
+notice board, a PDF attached to an email, a message forwarded through a class
+messaging group, or a post on the college portal.
+
+The result is that information which is individually well written becomes
+collectively chaotic. A student who wants to know what requires action this
+week must read every channel, mentally separate the mandatory from the
+optional, and compute the remaining time for each deadline. In practice this
+does not happen reliably. Students miss hall-ticket collection windows,
+register late for placement drives and learn about workshops after the seats
+are full. Faculty advisers spend time answering questions whose answers were
+already published somewhere.
+
+1.2 Bottlenecks in the Existing Process
+
+Three structural weaknesses explain why the existing process fails. The first
+is the absence of a common structure. Circulars are free-form prose, so the
+deadline, the issuing office and the action expected of the reader are buried
+in paragraphs and cannot be extracted mechanically. The second is the absence
+of prioritisation. A message announcing an optional quiz and a message
+announcing a mandatory end-semester examination arrive in the same channel
+with the same visual weight. Nothing tells the reader which one matters more.
+The third is the absence of a single, queryable store. Because circulars are
+scattered, there is no place where a student can ask simple questions such as
+which deadlines fall within the next seven days, or which notices mention
+hall tickets.
+
+A further, quieter weakness is the lack of accountability. When a circular is
+withdrawn or corrected, there is no record of when the change happened or
+which version a student saw. Disputes about whether a notice was published in
+time are settled by memory rather than evidence.
+
+1.3 Objectives of the System
+
+CircularSync was designed with the following objectives. It must accept
+circulars in a simple, human-editable structured format, either plain text or
+Markdown, so that issuing offices can adopt it without special software. It
+must detect new or edited circulars automatically and within seconds, without
+an operator triggering a scan. It must process many circulars concurrently so
+that a burst of announcements at the start of an examination season does not
+create a backlog. It must reject malformed and expired circulars with a clear
+explanation rather than silently ignoring them. It must rank active circulars
+by a transparent priority score that combines urgency of the deadline with
+category-specific importance. It must answer queries by category, keyword,
+deadline window and identifier. Finally, it must record every event in a
+durable audit trail.
+
+1.4 Scope of the Project
+
+The project delivers a working command-line application written in standard
+Java without third-party libraries. It covers three notice categories,
+examination, placement and club, which together account for most of the
+urgent communication students receive. Natural-language extraction from
+unstructured PDFs, user authentication and graphical interfaces are outside
+the scope of this version and are discussed as future work in Chapter 9.
+
+1.5 Organisation of the Report
+
+Chapter 2 describes the overall architecture and the flow of a notice through
+the system. Chapter 3 presents the object-oriented design. Chapter 4 explains
+the multithreading model and how race conditions are prevented. Chapter 5
+covers the use of Java NIO for watching directories and writing logs. Chapter
+6 discusses exception handling and resilience. Chapter 7 walks through the
+source packages. Chapter 8 reports the verification results and the version
+control history, and Chapter 9 concludes with future directions.
+
+
+CHAPTER 2: ARCHITECTURAL DESIGN AND SYSTEM FLOW
+
+2.1 Architectural Overview
+
+CircularSync follows a producer and consumer architecture with four principal
+components. The watcher component observes the incoming directory and
+produces work items. The work queue buffers those items. The worker pool
+consumes items, converts each file into a notice object and hands it to the
+registry. The registry stores and indexes notices and answers queries. Two
+supporting components complete the picture: the audit logger, which records
+every event without blocking the threads that produce events, and the command
+console, which translates user commands into registry queries.
+
+These components are deliberately decoupled. The watcher knows nothing about
+parsing, the workers know nothing about the console, and the registry knows
+nothing about files. Each component communicates with its neighbours through
+a narrow interface: a path placed on a queue, a notice passed to a register
+method, or a line of text passed to the logger. This decoupling is what allows
+each part to be tested in isolation and what allows the concurrency model to
+remain simple.
+
+2.2 Life Cycle of a Notice
+
+The flow of a single notice illustrates how the components cooperate. An
+issuing office saves a file named, for example, sample_exam.txt into the
+incoming_notices directory. The operating system reports a creation event,
+and usually one or more modification events, to the Java WatchService. The
+watcher thread, which is blocked waiting for such events, wakes up, resolves
+the relative file name against the watched directory, confirms that the file
+has a supported extension, and offers the absolute path to the work queue.
+The watcher then immediately returns to waiting for the next event.
+
+One of the worker threads, blocked on the queue, receives the path. It first
+waits until the file has stopped changing, by reading the file size and last
+modification time repeatedly until two consecutive readings agree. It then
+compares this fingerprint with the one recorded the last time the same path
+was processed; if they are equal, the event is a duplicate notification for a
+save that has already been handled and is discarded. Otherwise the worker
+passes the path to the parser service, which reads the content, detects the
+notice type from the TYPE header, constructs the appropriate subclass, and
+runs validation, metadata parsing and the deadline check. The resulting
+notice is registered. The registry reports whether the notice was newly
+added, replaced an earlier version of the same file, or duplicated content
+already present. The worker writes an audit record for the outcome and
+notifies any registered listeners, which in daemon mode print the new notice
+on the console.
+
+When a file is deleted from the directory, the watcher receives a deletion
+event and asks the registry to withdraw the notice that was loaded from that
+file name. When a file is edited, the new version replaces the old one
+atomically. When a file fails validation, the worker records the reason and,
+if an earlier valid version of the file was on the board, withdraws it so
+that stale information is not shown.
+
+2.3 Operating Modes
+
+The command-line harness exposes three modes built on the same components.
+The scan mode starts the worker pool, queues every file already present in
+the directory, waits for the pipeline to drain, prints the ranked board and
+exits. The query mode does the same but runs a single query command, which
+makes the system usable from scripts. The daemon mode processes existing files
+and then keeps the watcher running, presenting an interactive prompt through
+which the user can list, search and inspect notices while new files continue
+to arrive. The daemon can also run unattended for a fixed duration, which is
+how the live verification in Chapter 8 was performed. Because all three modes
+share the same pipeline, a behaviour verified in one mode holds in the others.
+
+2.4 Design Decisions
+
+Several decisions shaped the architecture. The first was to keep the registry
+in memory. The number of active circulars at any time is in the hundreds, not
+millions, so an in-memory structure gives immediate query response without
+the operational burden of a database. The audit log and the board snapshot
+provide durability for the information that must survive a restart, and the
+source files themselves remain the authoritative record, so the registry can
+always be rebuilt by rescanning the directory.
+
+The second decision was to use the file system as the integration point.
+Dropping a file into a directory is something every office can do, whether by
+hand, by a shared network folder or by a script that converts email
+attachments. This choice keeps the barrier to adoption low.
+
+The third decision was to compute the priority score once, at parse time, and
+cache it in the notice. The score depends on the reference date, and if it
+were recomputed on every comparison the sorted collection could become
+internally inconsistent as the date changed. Caching makes the ordering
+stable for the lifetime of the notice, and a restart or rescan recomputes
+scores against the new date.
+
+
+CHAPTER 3: OBJECT-ORIENTED DESIGN PATTERNS
+
+3.1 The Processable Interface
+
+The interface Processable, in the package com.circularsync.interfaces,
+defines the contract that every artefact entering the pipeline must honour.
+It declares three methods. The method validateFormat checks the structural
+shape of the raw content: that the header block is terminated, that all
+mandatory headers are present, and that the body is not empty. The method
+parseMetadata converts header values into typed fields such as dates and
+numbers. The method isProcessed reports whether both phases have completed.
+Both validateFormat and parseMetadata declare the checked exception
+InvalidNoticeFormatException, so any implementation is forced to report
+problems in a uniform way.
+
+Separating validation from parsing is a deliberate application of the
+principle that cheap checks should precede expensive ones. Structural
+validation rejects most malformed input before any conversion is attempted,
+and it allows error messages to distinguish between a file that is shaped
+wrongly and a file whose values are wrong.
+
+3.2 The Abstract Base Class Notice
+
+The abstract class Notice in com.circularsync.model implements Processable and
+Comparable. It holds the state shared by every circular: the source file name,
+the raw content, the reference date, the map of headers, the body, the
+identifier, the title, the issuer, the issue date, the deadline, the set of
+priority keywords and the cached priority score.
+
+Notice provides final implementations of validateFormat and parseMetadata.
+Declaring them final prevents subclasses from weakening the common checks.
+Within these methods the class applies the Template Method pattern. The
+common logic runs first, and at defined points it calls protected abstract
+hooks that each subclass must supply. The hook getTypeSpecificRequiredHeaders
+returns the header names mandatory for the category, and the hook
+parseTypeSpecificMetadata converts those headers into typed fields. The base
+class therefore controls the order of operations while subclasses contribute
+only what is genuinely different about them.
+
+Two public abstract methods express behaviour that differs completely between
+categories. The method calculatePriorityScore returns an integer score, and
+the method formatSummary returns a one-line human-readable digest. A third
+abstract method, getCategory, ties each subclass to a constant of the
+NoticeCategory enumeration.
+
+The base class also provides protected helper methods that subclasses use to
+build their scores. The method urgencyPoints implements a stepped curve that
+awards forty points when the deadline is one day away or less, thirty-two
+points within three days, twenty-four within a week, fourteen within two
+weeks, six within a month and two otherwise. The method keywordPoints sums
+the weights of the priority keywords that a notice carries, using a weight
+table supplied by the subclass. Stepped values were chosen over a continuous
+formula because they are easy to explain to students and administrators who
+want to know why one notice outranks another.
+
+3.3 Inheritance and Method Overriding in the Subclasses
+
+ExamNotice adds a course code, an examination date, a venue and an optional
+examination type. Its score starts from a category base of thirty points,
+reflecting the academic consequence of missing an examination notice. To this
+it adds the shared urgency points for the action deadline, a separate
+proximity bonus for the examination date itself, and the weights of keywords
+such as mandatory, hall-ticket and end-semester. For the sample examination
+notice, whose deadline was six days away and whose examination was twelve
+days away, the score was thirty plus twenty-four plus six plus twenty-six for
+keywords, giving eighty-six.
+
+PlacementNotice adds a company, a role, an eligibility statement, an optional
+package in lakhs per annum, an optional minimum grade point average and an
+optional drive date. Its base is twenty-five points. It adds the urgency
+points of the registration deadline and a compensation band bonus of five,
+ten or fifteen points, and weights keywords such as dream, registration and
+final-year. The sample placement notice scored seventy-seven.
+
+ClubNotice adds a club name, an event date, a venue and an optional seat
+limit. Its base is only ten points so that optional activities never bury
+mandatory ones, and it receives three quarters of the shared urgency points.
+It adds keyword weights for hackathon, workshop, competition and similar
+terms, and a scarcity bonus of four points when seats are limited to sixty or
+fewer. The sample club notice scored twenty-nine.
+
+Each subclass overrides formatSummary to present the fields that matter for
+its category. An examination summary shows the course, date and venue of the
+examination. A placement summary shows the company, role, package and drive
+date. A club summary shows the club, the event date and the seat limit. The
+console and the board snapshot call formatSummary through a reference of the
+base type, so the correct version is selected at run time by dynamic dispatch.
+This is the practical value of method overriding: code that renders the board
+does not need to know which kinds of notice exist.
+
+3.4 Natural Ordering and Identity
+
+Notice implements Comparable so that sorted collections can order notices
+without an external comparator. The natural order places the highest
+priority score first, then the earliest deadline, then the title in
+alphabetical order and finally the identifier. The final comparison on the
+identifier makes the order total, meaning no two distinct notices compare as
+equal, which is required for a TreeSet to retain both of them.
+
+The identifier is formed from a three-letter category prefix and the first
+ten hexadecimal characters of a SHA-256 digest of the content. Two files with
+identical content therefore receive the same identifier, and the registry can
+detect duplicates without comparing full texts. The equals and hashCode
+methods are defined on the identifier, which keeps them consistent with the
+natural ordering.
+
+3.5 Supporting Design Patterns
+
+The parser service applies the Factory Method pattern. Its method
+createNotice maps a category to the constructor of the matching subclass. It
+is declared protected so that a future version can override it to introduce
+new categories without changing the parsing pipeline. The daemon applies the
+Observer pattern through index listeners: any number of callbacks can be
+registered and each is invoked whenever a notice is indexed. The command
+console applies a simple Command pattern, interpreting the first word of a
+command line and dispatching to the matching operation.
+
+
+CHAPTER 4: MULTITHREADING AND CONCURRENCY CONTROL
+
+4.1 Thread Model
+
+CircularSync runs four kinds of threads. The main thread parses command-line
+options, starts the other components and, in daemon mode, reads user
+commands. A single watcher thread blocks on the WatchService and translates
+file-system events into work items. A fixed pool of worker threads, four by
+default and configurable with the threads option, parses and registers
+notices. A single audit writer thread drains the log queue to disk. A
+shutdown hook thread is also registered so that an interrupt from the
+keyboard still flushes the log and writes the final board snapshot.
+
+4.2 The ExecutorService and the BlockingQueue
+
+The worker pool is created with Executors.newFixedThreadPool using a custom
+thread factory that gives each thread a meaningful name, such as
+circularsync-worker-1, and installs an uncaught-exception handler. Named
+threads make the audit log readable, because every record shows which thread
+produced it.
+
+Rather than submitting one task per file to the executor, the daemon submits
+a fixed number of long-lived consumer loops, one per thread, and connects
+them to the watcher through an explicit LinkedBlockingQueue with a capacity of
+one thousand and twenty-four paths. Each worker loop calls take on the queue,
+which blocks until a path is available. This arrangement has two advantages
+over submitting tasks directly. The bounded queue provides back-pressure: if
+files arrive faster than they can be parsed, the watcher waits up to five
+seconds to enqueue and then records a saturation event, instead of letting
+memory grow without limit. And the queue is an explicit, inspectable object,
+so the console can report its depth and tests can reason about it.
+
+Shutdown uses the poison-pill technique. When the daemon is closed, it first
+closes the WatchService so that no new work is produced, then places one
+special sentinel path on the queue for each worker. Because the sentinels go
+behind any remaining real work, every queued file is still processed before
+the workers exit. The executor is then shut down and given fifteen seconds to
+terminate before a forced shutdown. The sentinel is compared by identity, not
+by equality, so a real file with the same name could never be mistaken for it.
+
+4.3 Race Conditions and Their Prevention
+
+Several race conditions are inherent in watching a directory, and each one is
+addressed explicitly.
+
+The first is duplicate events. Most operating systems report a creation event
+followed by one or more modification events for a single save. Without
+protection, the same file would be parsed several times. CircularSync guards
+against this in two places. A concurrent set of queued paths ensures that a
+path is present in the queue at most once; a second event for a path that is
+still waiting is simply dropped, since the single pending pass will read the
+latest content. After a worker has processed a file, a fingerprint consisting
+of the file size and modification time is stored, and any later event whose
+fingerprint matches is discarded as a duplicate. During the live verification
+the daemon observed six events and suppressed two in this way.
+
+The second race is two workers processing the same file. Because a path is
+removed from the queued set when a worker takes it, an edit made while the
+worker is still parsing will enqueue the path again, and a second worker may
+take it. If both workers parsed and registered concurrently, the older
+version could overwrite the newer one. The daemon prevents this with a
+per-path ReentrantLock held in a ConcurrentHashMap. The second worker waits
+for the first to finish, then sees the fingerprint of the newer content and
+processes it correctly.
+
+The third race is reading a partially written file. When a large file is
+copied into the directory, the creation event can arrive before the copy has
+finished. The worker therefore waits for the file to become stable, polling
+its size and modification time at intervals of one hundred and twenty
+milliseconds until two consecutive readings agree.
+
+The fourth race concerns the registry itself, discussed in the next section.
+
+4.4 Thread-Safe Collections in the Registry
+
+The NoticeRegistry combines concurrent collections with explicit locking. The
+primary store, a ConcurrentHashMap from identifier to notice, supports
+lock-free point lookups. A second ConcurrentHashMap maps each source file name
+to the identifier of the notice loaded from it, which is how edits replace
+earlier versions and deletions withdraw notices. Two inverted indexes, one by
+category and one by keyword, are ConcurrentHashMaps whose values are
+concurrent sets created with ConcurrentHashMap.newKeySet.
+
+The ranked board is a TreeSet ordered by the natural order of Notice. A
+TreeSet is not safe for concurrent modification, and a registration must
+update five structures as one atomic unit. The registry therefore protects
+every mutation with the write lock of a ReentrantReadWriteLock, and every
+ranked view with the read lock. Many threads may read the board at the same
+time, while a writer has exclusive access. Searches and point lookups do not
+take the lock at all, because the concurrent maps they read are safe on their
+own; at worst such a query observes a notice a moment before it appears in
+the ranked view, which is harmless.
+
+For queries by deadline the registry uses a PriorityQueue as a min-heap
+ordered by deadline, then by score. The query builds a fresh heap from the
+matching notices and polls it in order, so the result lists the soonest
+deadline first regardless of priority score. This complements the TreeSet,
+which orders by priority.
+
+4.5 Visibility and Publication
+
+Every field of a notice is written by the single worker thread that parses it,
+and the final write sets a volatile flag that marks the notice as processed.
+The Java Memory Model guarantees that all writes made before a volatile write
+are visible to any thread that subsequently reads the flag. Additionally, the
+notice is published to other threads through the registry's lock and
+concurrent maps, both of which establish happens-before relationships. Once
+published, a notice is never modified, so readers need no further
+synchronisation. Pipeline statistics are kept in AtomicLong counters that
+every thread can update without locks.
+
+4.6 Waiting for the Pipeline to Drain
+
+Scan mode and the tests need to know when all queued work has finished. The
+daemon maintains an in-flight counter guarded by a monitor object. The counter
+is incremented when a path is enqueued and decremented in a finally block when
+a worker finishes with it, whatever the outcome. The method awaitIdle waits on
+the monitor until the counter reaches zero or a timeout expires, and the
+decrementing worker calls notifyAll when the count reaches zero. The use of a
+finally block guarantees that an unexpected failure in one file can never
+leave the counter permanently raised.
+
+
+CHAPTER 5: JAVA NIO AND FILE MANAGEMENT ENGINE
+
+5.1 The WatchService Event Loop
+
+The daemon obtains a WatchService from the file system of the incoming
+directory and registers the directory for creation, modification and deletion
+events. The watcher thread runs a loop that calls take, which blocks without
+consuming processor time until at least one event is available. For each
+returned key it drains the pending events with pollEvents.
+
+Each event is handled according to its kind. An overflow event means that the
+operating system discarded events because they arrived too quickly; the daemon
+records a warning and rescans the whole directory, so no file is permanently
+missed. A deletion event triggers withdrawal of the corresponding notice. A
+creation or modification event for a regular file with a supported extension
+causes the path to be enqueued. After processing, the loop calls reset on the
+key; if the key is no longer valid, for example because the directory was
+removed, the daemon records an error and the loop ends.
+
+Stopping the watcher relies on a documented property of the API: closing the
+WatchService causes a blocked take call to throw ClosedWatchServiceException.
+The loop catches this exception and exits cleanly, so no polling with
+timeouts is required.
+
+5.2 Path and Files API Usage
+
+All file access goes through java.nio.file. Paths are normalised to absolute
+form before they are used as map keys, so that the same file is never
+represented by two different path objects. The initial scan uses
+Files.newDirectoryStream inside a try-with-resources block, which guarantees
+that the directory handle is released even if processing a file throws.
+Attribute reads use Files.readAttributes with BasicFileAttributes, which
+returns size and modification time in a single system call. File size limits
+are checked with Files.size before reading, so an accidentally dropped large
+file is rejected without being loaded into memory. Content is read through
+Files.newBufferedReader with an explicit UTF-8 charset, again inside
+try-with-resources. A byte-order mark at the start of the content, which some
+Windows editors write, is removed so that the first header is recognised.
+Directories for logs are created with Files.createDirectories, which succeeds
+whether or not the directory already exists.
+
+5.3 Asynchronous Audit Logging
+
+Writing to disk can take milliseconds and occasionally much longer. If worker
+threads wrote audit records directly, a slow disk would slow parsing. The
+AuditLogger therefore separates producing a record from writing it. A call to
+log formats a line containing a timestamp, a severity, the name of the
+calling thread, an event code and a detail message, and offers it to a
+bounded LinkedBlockingQueue. The caller returns immediately. If the queue is
+full for more than fifty milliseconds, the record is counted as dropped rather
+than stalling the caller.
+
+A dedicated writer thread opens the log file once, with Files.newBufferedWriter
+using the CREATE, APPEND and WRITE options, inside a try-with-resources
+statement that spans the life of the logger. It blocks on take for the next
+record, then drains every further record already waiting and writes them as a
+batch before a single flush. Batching reduces the number of flushes during
+bursts, and because only one thread writes to the file, lines can never be
+interleaved. Closing the logger places a sentinel on the queue and waits for
+the writer to finish, which guarantees that every record accepted before
+close reaches the disk.
+
+5.4 Atomic Snapshot Files
+
+In addition to the append-only audit log, the system writes the ranked board
+to a file named processed_notices.txt at the end of every scan and when the
+daemon stops. To prevent another program from reading a half-written board,
+the snapshot is first written to a temporary file in the same directory and
+then moved over the target with Files.move using the ATOMIC_MOVE and
+REPLACE_EXISTING options. If the file system does not support atomic moves,
+the code falls back to an ordinary replacing move. A finally block deletes the
+temporary file if anything goes wrong.
+
+5.5 Format Flexibility
+
+The parser accepts both plain-text and Markdown circulars. In Markdown files,
+header lines may be written as list items with bold keys, such as a hyphen
+followed by a bold TITLE label and the value. The normaliser strips the list
+marker and the bold markers before matching the header pattern. Lines that
+begin with a hash character, which are comments in the plain format and
+headings in Markdown, are ignored inside the header block. This allows the
+same file to read well in a Markdown viewer and to parse correctly.
+
+
+CHAPTER 6: EXCEPTION HANDLING AND SYSTEM RESILIENCE
+
+6.1 Custom Exception Hierarchy
+
+The package com.circularsync.exceptions contains a small hierarchy of checked
+exceptions. The root, CircularSyncException, extends Exception and carries the
+name of the source file that caused the failure. Two subclasses describe the
+recoverable failures of the domain.
+
+InvalidNoticeFormatException is thrown whenever a file cannot be interpreted.
+It records an optional line number, and its message is built in a consistent
+form that names the file, the line where applicable, and the specific
+problem, such as a missing header, a duplicate header, an empty value, an
+unparseable date or an unknown type. During the live run, a deliberately
+broken file produced the message that the notice was missing the required
+headers COURSE_CODE, DATE, DEADLINE, EXAM_DATE, PRIORITY_KEYS and VENUE, which
+tells the issuing office exactly what to correct.
+
+ExpiredDeadlineException is thrown when a structurally valid notice has a
+deadline earlier than the processing date. It carries both dates, so the
+audit record can state when the notice expired. Expired notices are archived
+in the log rather than shown on the board, because displaying an action that
+can no longer be taken only adds noise.
+
+Making these exceptions checked was a deliberate choice. A caller of the
+parser cannot forget that parsing can fail, because the compiler requires the
+failure to be handled or declared. Programming errors, such as calling
+parseMetadata before validateFormat, are signalled with unchecked
+IllegalStateException instead, because they indicate a defect in the code
+rather than a problem with the input.
+
+6.2 Input Validation Pipeline
+
+Validation happens in layers, each cheaper than the next. The parser first
+checks the file extension and ignores hidden files and editor swap files. It
+then checks that the file is neither empty nor larger than two hundred and
+fifty-six kilobytes. It reads the content as UTF-8 and converts a malformed
+encoding into an InvalidNoticeFormatException. It detects the type from the
+TYPE header before constructing any object. The notice then validates its
+header block, checking for a terminator line, the KEY colon value shape,
+duplicate keys, empty values, all common and type-specific required headers,
+consistency between the declared type and the subclass, and a non-empty body.
+Parsing converts dates and numbers, rejects a deadline that precedes the issue
+date, rejects an examination date before the issue date, rejects a grade point
+requirement above ten and a negative seat count, and requires at least one
+usable priority keyword. Only after all these checks does the deadline check
+run.
+
+6.3 Resource Safety with try-with-resources
+
+Every stream, reader, writer and directory handle in the system is opened in
+a try-with-resources statement: the directory stream used for scanning, the
+buffered reader used for parsing, the buffered writer of the audit thread,
+the writer of the snapshot file, and in scan mode the audit logger and the
+daemon themselves, both of which implement AutoCloseable. This guarantees that
+file handles are released in every path through the code, including
+exceptional ones. On Windows this matters particularly, because an open handle
+prevents a file from being deleted or replaced.
+
+6.4 Recovery from Edge Cases
+
+The worker loop catches each category of failure separately. A format or
+expiry rejection increments the corresponding counter, writes a warning to the
+audit log and withdraws any earlier valid version of the file. A
+NoSuchFileException, which occurs when a file is deleted between the event and
+the read, is treated as a normal outcome. Any other IOException, for example a
+sharing violation while another program still holds the file open, is logged
+as an error and the stored fingerprint is cleared, so that the next
+modification event retries the file. A RuntimeException from any unexpected
+defect is caught at the loop level and logged, so a single bad file can never
+terminate a worker thread and silently reduce the capacity of the pool.
+InterruptedException is never swallowed; the interrupt status is restored so
+that shutdown proceeds correctly.
+
+At the application level, the Main class maps failures to exit codes: two for
+incorrect command-line usage, one for input and output failures and one
+hundred and thirty for interruption. Scan mode returns a non-zero exit code
+if any input and output error occurred during processing, which allows the
+tool to be used reliably from scripts and scheduled jobs.
+
+
+CHAPTER 7: MODULE DESCRIPTION AND CODE ANATOMY
+
+7.1 Package Structure
+
+The source tree under src/com/circularsync contains six packages. The model
+package holds the notice hierarchy and the category enumeration. The
+interfaces package holds Processable. The exceptions package holds the three
+exception classes. The service package holds the parser, the registry and the
+audit logger. The daemon package holds the directory watcher. The main package
+holds the command-line entry point and the query console. The test suite lives
+in a separate source tree under test, so that test code is never mixed with
+production code.
+
+7.2 The model Package
+
+NoticeCategory is an enumeration with the constants EXAM, PLACEMENT and CLUB,
+each carrying an identifier prefix and a display name, and a lenient lookup
+method that accepts any capitalisation. Notice is the abstract base described
+in Chapter 3. Its validateFormat method normalises line endings, walks the
+lines until the terminator, matches each against a regular expression that
+requires an upper-case key, a colon and a value, and collects headers into an
+insertion-ordered map. ExamNotice, PlacementNotice and ClubNotice each declare
+an immutable set of required headers, an immutable map of keyword weights and
+a category base score, and implement the hooks and abstract methods.
+
+7.3 The service Package
+
+NoticeParserService is stateless apart from a supplier of the reference date,
+which is injected through the constructor. Production code supplies the
+system date, while the tests and the today option supply a fixed date, which
+makes every score in this report reproducible. Because the service has no
+mutable state, one instance is safely shared by all worker threads.
+
+NoticeRegistry exposes the operations register, removeBySource, find, ranked,
+top, byCategory, search, dueWithin, countsByCategory and size. The search
+algorithm tokenises the query by lower-casing it and splitting on any
+character that is not a letter, digit or hyphen, discards a small list of
+stop words and tokens shorter than two characters, and then intersects the
+identifier sets of each term from the keyword index. The result is therefore
+an AND search: every term must appear in the notice. The index covers the
+title, the priority keywords, the body and every header value except dates.
+The find operation accepts either a full identifier or a unique prefix, so a
+user can type EXM instead of the full ten-character digest when only one
+examination notice is active.
+
+AuditLogger is described in Chapter 5. It also exposes counts of written and
+dropped records for diagnostics.
+
+7.4 The daemon Package
+
+DirectoryWatcherDaemon owns the work queue, the queued-path set, the per-path
+locks, the fingerprint map, the listener list and the statistics counters.
+Its public methods start, startWorkers, startWatching, enqueueExistingFiles,
+awaitIdle and close define the lifecycle, and the private methods watchLoop,
+enqueue, workerLoop, processWithLock, process, awaitStableFile and
+handleDeletion implement the behaviour described in Chapters 4 and 5. The
+nested class Statistics groups the atomic counters, the nested class
+FileFingerprint holds the size and modification time, and the nested class
+NamedThreadFactory names the worker threads.
+
+7.5 The main Package
+
+Main parses options with a small hand-written parser, which validates numeric
+ranges and dates and rejects unknown options with a clear message. It wires
+the components together for each mode, registers the shutdown hook in daemon
+mode and writes the board snapshot. QueryConsole interprets the commands list,
+top, category, search, due, show, stats, help and quit. Its renderBoard
+method is shared by the console and the snapshot writer, so the file on disk
+always matches what the user sees.
+
+7.6 Build Scripts
+
+The project root contains build.sh for Unix-like shells and build.bat for the
+Windows command prompt. Both remove any previous output, collect the list of
+source files, compile them with the options release 17, all lint warnings and
+UTF-8 encoding into the out directory, and run the test suite. They use the
+JAVA_HOME environment variable when it is set, which allowed the project to be
+built with the Java Development Kit bundled with Android Studio on the
+development machine, where no JDK was on the system path.
+
+
+CHAPTER 8: VERIFICATION, TESTING AND GIT MANAGEMENT
+
+8.1 Test Methodology
+
+Verification combined automated unit and integration tests with live runs of
+the application. The automated suite, CircularSyncTestSuite, uses no external
+framework. Each test is a method executed inside a small harness that records
+a pass or failure, and the process exit code equals the number of failures,
+so the suite can gate a build. Every test fixes the reference date at 4
+November 2026, which makes expected scores exact.
+
+The suite contains eighteen tests in four groups. The parsing group verifies
+that a valid notice of each category is parsed into the correct subclass with
+the correct fields and an exactly predicted score, and that a Markdown file
+with decorated headers parses correctly. The rejection group verifies that a
+missing header, an unparseable date, an unterminated header block, an unknown
+type, an empty body and a deadline before the issue date each raise
+InvalidNoticeFormatException with an informative message, and that a past
+deadline raises ExpiredDeadlineException carrying the deadline. The registry
+group verifies ranking order, duplicate detection, replacement of an edited
+file and removal of its old index terms, AND-semantics search across titles,
+keywords, bodies and header values, and deadline ordering of the due query.
+
+The concurrency test starts eight threads behind a countdown latch so they
+begin simultaneously. Each registers fifty distinct notices while repeatedly
+reading the ranked board and searching the index. The test then checks that
+all four hundred registrations were accepted, that the registry holds exactly
+four hundred notices, that the board is strictly ordered at every position,
+and that the keyword index returns all four hundred for a common term.
+
+The two daemon tests use real temporary directories and the real
+WatchService. The first places three valid files, one malformed file, one
+expired file and one unsupported file in a directory, runs the pipeline with
+three workers, and checks that five files were queued, three indexed, one
+rejected for format and one for expiry, and that the audit log contains all
+three outcome codes. The second starts the full daemon on an empty directory,
+writes two files and waits until both are indexed, deletes one and waits
+until it is withdrawn, then rewrites the other with new content and waits
+until the revised version replaces the original.
+
+8.2 Results of the Automated Suite
+
+The project compiled without errors or lint warnings, producing classes from
+sixteen source files. All eighteen tests passed, and the suite reported
+eighteen passed and zero failed.
+
+8.3 Mock Notice Validation
+
+Three sample circulars were placed in incoming_notices. The file
+sample_exam.txt announces the end-semester examination for CS301 Operating
+Systems with a hall-ticket deadline of 10 November 2026. The file
+sample_placement.txt announces a recruitment drive with registration closing
+on 8 November 2026 and a package of 18.5 lakhs per annum. The file
+sample_club.txt announces a robotics workshop with forty seats and
+registration closing on 25 November 2026.
+
+Running the scan mode with four workers indexed all three notices with zero
+rejections and zero input or output errors, and exited with code zero. The
+board placed the examination notice first with a score of eighty-six, the
+placement notice second with seventy-seven and the club notice third with
+twenty-nine. The due query for seven days listed the placement notice before
+the examination notice, because its deadline is earlier, which confirms that
+the deadline heap orders independently of priority. The show query printed
+the full detail and body of the examination notice when given only the prefix
+EXM.
+
+The daemon mode was then run unattended for seven seconds with three workers.
+Two seconds after start, a Markdown hackathon circular and a deliberately
+broken examination circular were dropped into the directory, and both were
+deleted two seconds later. The audit log recorded the following sequence. The
+three sample notices were indexed concurrently by three different worker
+threads within the first quarter second. The hackathon notice was indexed with
+a score of forty-eight, reflecting its two-day deadline. The broken notice
+was rejected with a message listing its six missing headers. When the
+hackathon file was deleted, the watcher thread withdrew it from the registry.
+On shutdown the pipeline reported seven files queued, four indexed, one
+rejected for format, one removed, six events observed, two duplicate events
+suppressed and zero input or output errors. The final snapshot contained the
+three original notices in the expected order.
+
+Finally, the interactive shell was exercised by piping the commands top 2,
+search hall-ticket, category placement, an unknown command and quit. Each
+command produced the expected output, the unknown command produced a helpful
+message rather than an error, and the process exited with code zero.
+
+8.4 Git Management
+
+The workspace was initialised as a Git repository on a branch named main. A
+gitignore file excludes compiled class files, the out directory, jar files,
+temporary files, editor configuration and the generated contents of
+audit_logs, while a placeholder file keeps the audit_logs directory itself in
+the repository. All source files, the test suite, the sample notices, the
+build scripts and the readme were staged and committed with the message
+"feat: initial implementation of CircularSync notice daemon, thread pool
+parser, and NIO watch service". After the commit, git status reported that
+the working tree was clean. This report was added afterwards in a separate
+documentation commit, so that the history distinguishes the implementation
+from its documentation.
+
+
+CHAPTER 9: CONCLUSION AND FUTURE SCOPE
+
+9.1 Conclusion
+
+CircularSync shows that the disorder of campus communication can be reduced
+substantially with a modest, well-structured program. By asking issuing
+offices for a light, human-readable header block, the system turns
+unstructured announcements into data that can be validated, ranked and
+queried. The Java NIO WatchService makes ingestion automatic and immediate.
+The combination of an ExecutorService and a bounded BlockingQueue lets many
+circulars be processed at once without ever blocking the thread that watches
+the directory. Concurrent collections and a read-write lock keep the registry
+consistent under simultaneous updates and queries, and a TreeSet together
+with a PriorityQueue keeps notices ordered by priority and by deadline. The
+abstract Notice class, its three subclasses and the Processable interface
+show how inheritance, method overriding and interface contracts keep shared
+logic in one place while allowing each category to define its own ranking and
+presentation. Custom checked exceptions and consistent use of
+try-with-resources make every failure visible and every resource safe. The
+automated tests and live runs confirm that the system behaves correctly in
+normal operation, under concurrent load and in the face of malformed,
+expired, edited and deleted input.
+
+9.2 Campus Integration
+
+The most direct extension is to connect CircularSync to the channels through
+which circulars already travel. A small adapter could read a dedicated email
+inbox and save structured attachments into the incoming directory. Another
+could export the board as a web page or a JSON feed consumed by the college
+portal. Because the directory is the integration point, each adapter can be
+written and deployed independently, without changing the core.
+
+Many existing circulars are scanned PDFs. A preprocessing stage that applies
+optical character recognition and then proposes a header block for an
+administrator to confirm would allow legacy documents to enter the system.
+Further, a lightweight classifier could suggest the TYPE and PRIORITY_KEYS
+headers from the text, reducing the effort required from issuing offices.
+
+9.3 Mobile Notification Hooks
+
+The daemon already supports index listeners that are invoked whenever a
+notice is indexed. In the current version the listener prints to the console,
+but the same hook can call a push-notification service, send a message to a
+messaging group, or post to a campus application. Combined with student
+profiles that record branch, year and club memberships, notifications could
+be targeted: a placement circular for final-year computer science students
+would reach only those students, and a reminder could be sent automatically
+when a deadline falls within a configured window.
+
+9.4 System Scalability
+
+For a single college the in-memory registry is more than sufficient. To serve
+a university with many affiliated colleges, the registry could be backed by a
+database, with the in-memory structures acting as a cache. The worker pool is
+already configurable, and because workers share only the queue and the
+registry, the pipeline could be distributed across machines by replacing the
+local queue with a message broker. The watcher could also be extended to
+monitor several directories, one per issuing office, which would let the
+system attribute circulars to their source automatically.
+
+9.5 Closing Remarks
+
+The project fulfilled its objectives within the constraints of standard Java
+and no external libraries. It is small enough to understand completely and
+complete enough to use. Most importantly, it changes the question a student
+must answer from where the information is to what needs to be done next,
+which is the question that matters.
+
+
+REFERENCES
+
+Goetz, B., Peierls, T., Bloch, J., Bowbeer, J., Holmes, D. and Lea, D. Java
+Concurrency in Practice. Addison-Wesley, 2006.
+
+Bloch, J. Effective Java, Third Edition. Addison-Wesley, 2018.
+
+Gamma, E., Helm, R., Johnson, R. and Vlissides, J. Design Patterns: Elements of
+Reusable Object-Oriented Software. Addison-Wesley, 1994.
+
+Oracle Corporation. The Java Tutorials: Watching a Directory for Changes.
+Java Platform, Standard Edition Documentation.
+
+Oracle Corporation. Java Platform, Standard Edition 17 API Specification,
+packages java.nio.file and java.util.concurrent.
+
+Gosling, J., Joy, B., Steele, G., Bracha, G., Buckley, A. and Smith, D. The
+Java Language Specification, Java SE 17 Edition, Chapter 17: Threads and Locks.

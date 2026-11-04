@@ -80,4 +80,4 @@ incoming_notices/   sample notices
 audit_logs/         audit.log and processed_notices.txt (generated at runtime)
 ```
 
-See `CircularSync_Project_Report.md` for the full design report.
+See `CircularSync_Project_Report.txt` for the full design report.
