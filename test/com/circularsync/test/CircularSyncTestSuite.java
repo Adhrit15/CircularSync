@@ -92,7 +92,7 @@ public final class CircularSyncTestSuite {
         test("rejects a PDF without selectable text", this::rejectsTextlessPdf);
         test("rejects a corrupt Word document", this::rejectsCorruptDocx);
         test("web portal uploads, tracks and serves the board", this::webPortalEndToEnd);
-        test("web portal requires the admin key for changes", this::webPortalAdminProtection);
+        test("web portal requires the admin password for changes", this::webPortalAdminProtection);
 
         System.out.println();
         System.out.println(passed + " passed, " + failures.size() + " failed");
@@ -548,7 +548,7 @@ public final class CircularSyncTestSuite {
         Path dir = Files.createTempDirectory("circularsync-web");
         Path logs = Files.createTempDirectory("circularsync-logs");
         HttpClient http = HttpClient.newHttpClient();
-        String key = "test-admin-key-123";
+        String key = "Campus Pass+1 é";
         try {
             NoticeRegistry registry = new NoticeRegistry();
             FileActivityTracker tracker = new FileActivityTracker();
@@ -590,7 +590,9 @@ public final class CircularSyncTestSuite {
     private static int post(HttpClient http, String url, String body, String adminKey) throws IOException, InterruptedException {
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url)).POST(HttpRequest.BodyPublishers.ofString(body));
         if (adminKey != null) {
-            request.header(WebPortalServer.ADMIN_HEADER, adminKey);
+            // Same encoding as the portal page (encodeURIComponent): spaces as %20, "+" as %2B.
+            request.header(WebPortalServer.ADMIN_HEADER,
+                    java.net.URLEncoder.encode(adminKey, StandardCharsets.UTF_8).replace("+", "%20"));
         }
         return http.send(request.build(), HttpResponse.BodyHandlers.ofString()).statusCode();
     }

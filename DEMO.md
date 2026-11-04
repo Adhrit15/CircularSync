@@ -77,9 +77,11 @@ and in a second terminal:
 ```
 
 The second window prints a `https://<random>.trycloudflare.com` address; share
-it (or show it as a QR code). The first window prints the **admin key**. Anyone
-can browse the board, but only someone signed in with that key (top-right
-*Admin sign-in*) can upload or delete. The address changes every time the
+it (or show it as a QR code). Anyone can browse the board, but only someone
+signed in with the admin password (top-right *Admin sign-in*) can upload or
+delete. Set your own password first with
+`$env:CIRCULARSYNC_ADMIN_PASSWORD = 'your password'`, or use the one the first
+window generates and prints. The address changes every time the
 tunnel restarts. For a permanent address, deploy to Render as described in
 README.md.
 

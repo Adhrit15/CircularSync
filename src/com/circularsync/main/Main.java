@@ -65,8 +65,9 @@ public final class Main {
             "  --port <n>          web only: portal port   (default: 8080, or $PORT)",
             "  --host <addr>       web only: interface to bind (default: 127.0.0.1; 0.0.0.0 for all)",
             "  --public            web only: the portal is reachable from the internet (e.g. via a tunnel);",
-            "                      requires an admin key for uploads and deletions",
-            "  --admin-key <key>   web only: admin key (default: $CIRCULARSYNC_ADMIN_KEY, generated if public)",
+            "                      requires an admin password for uploads and deletions",
+            "  --admin-password <p> web only: admin password (default: $CIRCULARSYNC_ADMIN_PASSWORD;",
+            "                      generated and printed if public and unset)",
             "  --trust-proxy       web only: read client IPs from X-Forwarded-For (behind a proxy or tunnel)",
             "  --webroot <path>    web only: portal files  (default: web)",
             "  --no-browser        web only: do not open the portal in a browser",
@@ -214,13 +215,16 @@ public final class Main {
             System.out.println("  Web portal running at " + url
                     + (isLoopback(options.host) ? "" : " (listening on " + options.host + ":" + portal.get().getPort() + ")"));
             if (options.generatedAdminKey != null) {
-                System.out.println("  Admin key (needed to upload or delete). Copy the next line only:");
+                System.out.println("  No admin password was set, so one was generated. Copy the next line only:");
                 System.out.println();
                 System.out.println(options.generatedAdminKey);
                 System.out.println();
-                System.out.println("  Set CIRCULARSYNC_ADMIN_KEY to keep the same key across restarts.");
+                System.out.println("  To choose your own, set CIRCULARSYNC_ADMIN_PASSWORD or pass --admin-password.");
             } else if (resolveAdminKey(options) != null) {
-                System.out.println("  Uploads and deletions require the configured admin key.");
+                System.out.println("  Uploads and deletions require the admin password you configured.");
+                if (resolveAdminKey(options).length() < 8) {
+                    System.out.println("  Warning: the admin password is shorter than 8 characters; choose a longer one.");
+                }
             }
             System.out.println();
             if (options.openBrowser) {
@@ -268,15 +272,19 @@ public final class Main {
     }
 
     /**
-     * The admin key from --admin-key or CIRCULARSYNC_ADMIN_KEY. A portal that is
-     * public or bound beyond this computer is never left open: a random key is
-     * generated and printed if none is configured.
+     * The admin password from --admin-password, CIRCULARSYNC_ADMIN_PASSWORD or the
+     * older CIRCULARSYNC_ADMIN_KEY. A portal that is public or bound beyond this
+     * computer is never left open: a random password is generated and printed if
+     * none is configured.
      */
     private static String resolveAdminKey(Options options) {
         if (options.adminKey != null) {
             return options.adminKey;
         }
-        String fromEnv = System.getenv("CIRCULARSYNC_ADMIN_KEY");
+        String fromEnv = System.getenv("CIRCULARSYNC_ADMIN_PASSWORD");
+        if (fromEnv == null || fromEnv.isBlank()) {
+            fromEnv = System.getenv("CIRCULARSYNC_ADMIN_KEY");
+        }
         if (fromEnv != null && !fromEnv.isBlank()) {
             options.adminKey = fromEnv.trim();
             return options.adminKey;
@@ -395,10 +403,11 @@ public final class Main {
                     case "--trust-proxy":
                         options.trustProxy = true;
                         break;
+                    case "--admin-password":
                     case "--admin-key":
-                        options.adminKey = value(args, ++i, arg);
-                        if (options.adminKey.length() < 8) {
-                            throw new IllegalArgumentException("--admin-key must be at least 8 characters");
+                        options.adminKey = value(args, ++i, arg).trim();
+                        if (options.adminKey.isEmpty()) {
+                            throw new IllegalArgumentException(arg + " must not be empty");
                         }
                         break;
                     case "--today":

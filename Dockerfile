@@ -1,8 +1,8 @@
 # CircularSync container: builds from source, then runs the daemon and web
 # portal as a non-root user. Works on any Docker host (Render, Railway, Fly.io,
-# a VPS). The platform's $PORT is honoured; the admin key comes from the
-# CIRCULARSYNC_ADMIN_KEY environment variable (a random one is generated and
-# printed in the logs if it is not set).
+# a VPS). The platform's $PORT is honoured; the admin password comes from the
+# CIRCULARSYNC_ADMIN_PASSWORD environment variable (a random one is generated
+# and printed in the logs if it is not set).
 
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /app

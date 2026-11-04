@@ -227,7 +227,18 @@ public final class WebPortalServer implements AutoCloseable {
             return true;
         }
         String presented = exchange.getRequestHeaders().getFirst(ADMIN_HEADER);
-        return presented != null && MessageDigest.isEqual(adminKeyBytes, presented.getBytes(StandardCharsets.UTF_8));
+        if (presented == null) {
+            return false;
+        }
+        // HTTP headers carry only ASCII, so the portal percent-encodes the password (spaces,
+        // symbols and non-English letters survive); plain ASCII values decode to themselves.
+        String decoded;
+        try {
+            decoded = URLDecoder.decode(presented.replace("+", "%2B"), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            decoded = presented;
+        }
+        return MessageDigest.isEqual(adminKeyBytes, decoded.getBytes(StandardCharsets.UTF_8));
     }
 
     /** Admin check with brute-force lockout, plus a per-client write rate limit. */
@@ -235,13 +246,13 @@ public final class WebPortalServer implements AutoCloseable {
         String client = clientAddress(exchange);
         if (adminKeyBytes != null) {
             if (failedLogins.isExhausted(client)) {
-                throw new ApiException(429, "Too many wrong admin keys; try again in a few minutes");
+                throw new ApiException(429, "Too many wrong passwords; try again in a few minutes");
             }
             if (!isAdmin(exchange)) {
                 failedLogins.tryAcquire(client);
                 audit.warn("PORTAL_DENIED", "Rejected " + exchange.getRequestMethod() + " "
-                        + exchange.getRequestURI().getPath() + " from " + client + " (missing or wrong admin key)");
-                throw new ApiException(401, "Admin key required");
+                        + exchange.getRequestURI().getPath() + " from " + client + " (missing or wrong admin password)");
+                throw new ApiException(401, "Admin password required");
             }
         }
         if (!writes.tryAcquire(client)) {

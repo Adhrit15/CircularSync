@@ -8,7 +8,8 @@ services:
     plan: free
     healthCheckPath: /api/health
     envVars:
-      # Random admin key generated once by Render. Read it in the dashboard
-      # under Environment, then enter it in the portal's "Admin sign-in".
-      - key: CIRCULARSYNC_ADMIN_KEY
-        generateValue: true
+      # The admin password for uploading and deleting circulars. Render asks
+      # you to type it when you create the Blueprint; change it any time under
+      # the service's Environment tab (the service restarts with the new one).
+      - key: CIRCULARSYNC_ADMIN_PASSWORD
+        sync: false

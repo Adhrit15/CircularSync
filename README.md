@@ -60,8 +60,8 @@ Portal options:
 | --- | --- |
 | `--port <n>` | port to listen on (default 8080, or `$PORT`) |
 | `--host <addr>` | interface to bind (default `127.0.0.1`; `0.0.0.0` for all) |
-| `--public` | the portal is reachable from the internet; requires an admin key |
-| `--admin-key <key>` | admin key (default `$CIRCULARSYNC_ADMIN_KEY`; generated and printed if public and unset) |
+| `--public` | the portal is reachable from the internet; requires an admin password |
+| `--admin-password <p>` | admin password (default `$CIRCULARSYNC_ADMIN_PASSWORD`; generated and printed if public and unset) |
 | `--trust-proxy` | take client IPs from `X-Forwarded-For` / `CF-Connecting-IP` (behind a proxy or tunnel) |
 | `--webroot <path>` | folder with `index.html` (default `web`) |
 | `--no-browser` | do not open the portal in a browser |
@@ -69,18 +69,21 @@ Portal options:
 ## Publishing on the internet
 
 When the portal is public, everyone can view the board, but uploading,
-deleting and demo drops need the admin key ("Admin sign-in" in the portal).
-Wrong keys lock a client out after 10 attempts per 10 minutes, uploads are rate
-limited, file types are checked by content, and responses carry security
+deleting and demo drops need the admin password ("Admin sign-in" in the
+portal). Choose one of at least 8 characters; spaces and symbols are fine.
+Wrong passwords lock a device out after 10 attempts per 10 minutes, uploads are
+rate limited, file types are checked by content, and responses carry security
 headers.
 
 **Option 1: cloud host (stays online without your PC).** The `Dockerfile`
 builds and runs the portal on any Docker host. For Render's free tier: push
 this repository to GitHub, open https://dashboard.render.com, choose
-**New > Blueprint**, select the repository, and apply. `render.yaml` creates the
-web service and a random `CIRCULARSYNC_ADMIN_KEY` (shown under the service's
-**Environment** tab). Free instances sleep when idle, and uploaded files are
-not kept across redeploys.
+**New > Blueprint**, select the repository, and when Render asks for
+`CIRCULARSYNC_ADMIN_PASSWORD`, type the password you want to use. Apply, and
+sign in on the portal with that password. To change it later, edit
+`CIRCULARSYNC_ADMIN_PASSWORD` under the service's **Environment** tab; the
+service restarts with the new password. Free instances sleep when idle, and
+uploaded files are not kept across redeploys.
 
 **Option 2: tunnel from this PC (instant, while the PC is on).**
 
@@ -89,9 +92,10 @@ run.bat web --public --trust-proxy
 cloudflared tunnel --url http://localhost:8080
 ```
 
-The first command prints the admin key, the second a public
-`https://<random>.trycloudflare.com` address. Set `CIRCULARSYNC_ADMIN_KEY`
-before starting to keep the same key across restarts.
+The second command prints a public `https://<random>.trycloudflare.com`
+address. To use your own password, set it before starting the portal
+(PowerShell: `$env:CIRCULARSYNC_ADMIN_PASSWORD = 'your password'`); otherwise
+the first command generates one and prints it.
 
 ## Circular formats
 
