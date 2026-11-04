@@ -1,0 +1,6 @@
+TYPE: PLACEMENT
+TITLE: Internship Opportunity
+DATE: 2026-11-04
+---
+This notice is missing its deadline, keywords, company, role and eligibility
+headers. CircularSync rejects it and writes the reason to the audit log.

@@ -80,4 +80,5 @@ incoming_notices/   sample notices
 audit_logs/         audit.log and processed_notices.txt (generated at runtime)
 ```
 
-See `CircularSync_Project_Report.txt` for the full design report.
+See `DEMO.md` for a step-by-step live demo, and `CircularSync_Project_Report.txt`
+for the full design report.

@@ -1,0 +1,15 @@
+TYPE: EXAM
+TITLE: Re-Examination Registration - MA201 Engineering Mathematics III
+DATE: 2026-11-04
+DEADLINE: 2026-11-05
+ISSUER: Office of the Controller of Examinations
+PRIORITY_KEYS: mandatory, re-exam, backlog
+COURSE_CODE: MA201
+EXAM_TYPE: Re-Examination
+EXAM_DATE: 2026-11-07
+VENUE: Examination Hall B
+---
+Students with a backlog in MA201 Engineering Mathematics III must register for
+the re-examination at the examination section by 5 November 2026. The
+re-examination will be held on 7 November 2026 in Examination Hall B.
+Registrations received after the deadline will not be accepted.

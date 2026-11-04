@@ -1,0 +1,12 @@
+TYPE: CLUB
+TITLE: Photography Walk Registration
+DATE: 2026-10-20
+DEADLINE: 2026-10-30
+PRIORITY_KEYS: registration, free
+CLUB_NAME: Photography Society
+EVENT_DATE: 2026-11-01
+EVENT_VENUE: Main Gate
+---
+Registration for the photography walk closed on 30 October. CircularSync
+recognises that the deadline has passed and archives the notice instead of
+showing it on the board.
