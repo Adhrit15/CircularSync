@@ -30,7 +30,7 @@ public final class QueryConsole {
             "Query commands:",
             "  list                   every active notice, highest priority first",
             "  top <n>                the n highest-priority notices",
-            "  category <type>        notices of one type: EXAM, PLACEMENT or CLUB",
+            "  category <type>        notices of one type: EXAM, PLACEMENT, CLUB or GENERAL",
             "  search <words...>      notices containing all of the given words",
             "  due <days>             notices whose deadline is within <days> days, soonest first",
             "  show <id>              full detail of one notice (a unique id prefix is enough)",
@@ -66,10 +66,10 @@ public final class QueryConsole {
                     break;
                 case "category":
                 case "cat":
-                    requireArgument(tokens, "category <EXAM|PLACEMENT|CLUB>");
+                    requireArgument(tokens, "category <EXAM|PLACEMENT|CLUB|GENERAL>");
                     Optional<NoticeCategory> category = NoticeCategory.fromLabel(tokens.get(0));
                     if (category.isEmpty()) {
-                        out.println("Unknown category '" + tokens.get(0) + "'. Use EXAM, PLACEMENT or CLUB.");
+                        out.println("Unknown category '" + tokens.get(0) + "'. Use EXAM, PLACEMENT, CLUB or GENERAL.");
                     } else {
                         printNotices(category.get().getDisplayName() + " notices", registry.byCategory(category.get()));
                     }

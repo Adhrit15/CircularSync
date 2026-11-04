@@ -12,7 +12,8 @@ public enum NoticeCategory {
 
     EXAM("EXM", "Examination"),
     PLACEMENT("PLC", "Placement / Internship"),
-    CLUB("CLB", "Club / Student Activity");
+    CLUB("CLB", "Club / Student Activity"),
+    GENERAL("GEN", "General / Administrative");
 
     private final String idPrefix;
     private final String displayName;

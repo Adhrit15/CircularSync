@@ -17,5 +17,5 @@ if not exist out\com\circularsync\main\Main.class (
   exit /b 1
 )
 
-"%JAVA%" -cp out com.circularsync.main.Main %*
+"%JAVA%" -cp "out;lib\*" com.circularsync.main.Main %*
 endlocal

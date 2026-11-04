@@ -6,6 +6,7 @@ import com.circularsync.service.AuditLogger;
 import com.circularsync.service.NoticeParserService;
 import com.circularsync.service.NoticeRegistry;
 import com.circularsync.web.FileActivityTracker;
+import com.circularsync.web.PortalSettings;
 import com.circularsync.web.WebPortalServer;
 
 import java.io.BufferedReader;
@@ -16,10 +17,12 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -59,7 +62,12 @@ public final class Main {
             "  --threads <n>       worker thread count     (default: 4)",
             "  --duration <secs>   daemon only: run unattended for this long, then stop",
             "  --today <date>      override today's date (yyyy-MM-dd), for reproducible runs",
-            "  --port <n>          web only: portal port   (default: 8080)",
+            "  --port <n>          web only: portal port   (default: 8080, or $PORT)",
+            "  --host <addr>       web only: interface to bind (default: 127.0.0.1; 0.0.0.0 for all)",
+            "  --public            web only: the portal is reachable from the internet (e.g. via a tunnel);",
+            "                      requires an admin key for uploads and deletions",
+            "  --admin-key <key>   web only: admin key (default: $CIRCULARSYNC_ADMIN_KEY, generated if public)",
+            "  --trust-proxy       web only: read client IPs from X-Forwarded-For (behind a proxy or tunnel)",
             "  --webroot <path>    web only: portal files  (default: web)",
             "  --no-browser        web only: do not open the portal in a browser",
             "",
@@ -185,8 +193,10 @@ public final class Main {
         if (withPortal) {
             FileActivityTracker tracker = new FileActivityTracker();
             daemon.addProcessingListener(tracker);
-            WebPortalServer server = new WebPortalServer(options.port, options.webRoot, options.demoDirectory,
-                    registry, daemon, tracker, audit, options.today);
+            String adminKey = resolveAdminKey(options);
+            PortalSettings settings = new PortalSettings(options.host, options.port, options.webRoot,
+                    options.demoDirectory, adminKey, options.trustProxy);
+            WebPortalServer server = new WebPortalServer(settings, registry, daemon, tracker, audit, options.today);
             try {
                 server.start();
             } catch (BindException e) {
@@ -201,7 +211,14 @@ public final class Main {
         if (portal.get() != null) {
             String url = portal.get().getUrl();
             System.out.println();
-            System.out.println("  Web portal running at " + url);
+            System.out.println("  Web portal running at " + url
+                    + (isLoopback(options.host) ? "" : " (listening on " + options.host + ":" + portal.get().getPort() + ")"));
+            if (options.generatedAdminKey != null) {
+                System.out.println("  Admin key (needed to upload or delete): " + options.generatedAdminKey);
+                System.out.println("  Set CIRCULARSYNC_ADMIN_KEY to keep the same key across restarts.");
+            } else if (resolveAdminKey(options) != null) {
+                System.out.println("  Uploads and deletions require the configured admin key.");
+            }
             System.out.println();
             if (options.openBrowser) {
                 openBrowser(url);
@@ -247,6 +264,34 @@ public final class Main {
         return 0;
     }
 
+    /**
+     * The admin key from --admin-key or CIRCULARSYNC_ADMIN_KEY. A portal that is
+     * public or bound beyond this computer is never left open: a random key is
+     * generated and printed if none is configured.
+     */
+    private static String resolveAdminKey(Options options) {
+        if (options.adminKey != null) {
+            return options.adminKey;
+        }
+        String fromEnv = System.getenv("CIRCULARSYNC_ADMIN_KEY");
+        if (fromEnv != null && !fromEnv.isBlank()) {
+            options.adminKey = fromEnv.trim();
+            return options.adminKey;
+        }
+        if (options.publicMode || !isLoopback(options.host)) {
+            byte[] random = new byte[18];
+            new SecureRandom().nextBytes(random);
+            options.adminKey = Base64.getUrlEncoder().withoutPadding().encodeToString(random);
+            options.generatedAdminKey = options.adminKey;
+            return options.adminKey;
+        }
+        return null;
+    }
+
+    private static boolean isLoopback(String host) {
+        return host.equals("127.0.0.1") || host.equals("localhost") || host.equals("::1");
+    }
+
     private static void openBrowser(String url) {
         try {
             if (java.awt.Desktop.isDesktopSupported()
@@ -285,10 +330,31 @@ public final class Main {
         int threads = 4;
         long durationSeconds;
         Supplier<LocalDate> today = LocalDate::now;
-        int port = 8080;
+        int port = defaultPort();
+        String host = "127.0.0.1";
+        boolean publicMode;
+        boolean trustProxy;
+        String adminKey;
+        String generatedAdminKey;
         Path webRoot = Paths.get("web");
         Path demoDirectory = Paths.get("demo");
         boolean openBrowser = true;
+
+        /** Hosting platforms such as Render pass the port to listen on in $PORT. */
+        private static int defaultPort() {
+            String env = System.getenv("PORT");
+            if (env != null) {
+                try {
+                    int port = Integer.parseInt(env.trim());
+                    if (port > 0 && port <= 65_535) {
+                        return port;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // fall back to the default
+                }
+            }
+            return 8080;
+        }
 
         static Options parse(String[] args) {
             Options options = new Options();
@@ -316,6 +382,21 @@ public final class Main {
                         break;
                     case "--no-browser":
                         options.openBrowser = false;
+                        break;
+                    case "--host":
+                        options.host = value(args, ++i, arg);
+                        break;
+                    case "--public":
+                        options.publicMode = true;
+                        break;
+                    case "--trust-proxy":
+                        options.trustProxy = true;
+                        break;
+                    case "--admin-key":
+                        options.adminKey = value(args, ++i, arg);
+                        if (options.adminKey.length() < 8) {
+                            throw new IllegalArgumentException("--admin-key must be at least 8 characters");
+                        }
                         break;
                     case "--today":
                         String date = value(args, ++i, arg);

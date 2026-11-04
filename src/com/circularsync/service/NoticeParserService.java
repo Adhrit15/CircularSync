@@ -4,6 +4,7 @@ import com.circularsync.exceptions.ExpiredDeadlineException;
 import com.circularsync.exceptions.InvalidNoticeFormatException;
 import com.circularsync.model.ClubNotice;
 import com.circularsync.model.ExamNotice;
+import com.circularsync.model.GeneralNotice;
 import com.circularsync.model.Notice;
 import com.circularsync.model.NoticeCategory;
 import com.circularsync.model.PlacementNotice;
@@ -27,7 +28,10 @@ import java.util.function.Supplier;
  * <p>Pipeline for a single file:</p>
  * <ol>
  *   <li>pre-checks on the path: supported extension, non-empty, size limit;</li>
- *   <li>UTF-8 read through a try-with-resources {@link BufferedReader};</li>
+ *   <li>text acquisition: UTF-8 read through a try-with-resources {@link BufferedReader} for
+ *       .txt/.md, or {@link DocumentTextExtractor} for .pdf/.docx;</li>
+ *   <li>structuring: text already in the header format is used as is, free-form circulars are
+ *       converted by {@link CircularStructurer};</li>
  *   <li>category detection from the TYPE header (factory step);</li>
  *   <li>{@code validateFormat()}, {@code parseMetadata()} and
  *       {@code checkDeadline()} on the concrete subclass.</li>
@@ -35,8 +39,14 @@ import java.util.function.Supplier;
  */
 public class NoticeParserService {
 
+    /** Size limit for plain-text notices. */
     public static final long MAX_FILE_BYTES = 256 * 1024;
-    public static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".txt", ".md");
+    /** Size limit for PDF and Word documents. */
+    public static final long MAX_DOCUMENT_BYTES = 15L * 1024 * 1024;
+    public static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".txt", ".md", ".pdf", ".docx");
+
+    private final DocumentTextExtractor extractor = new DocumentTextExtractor();
+    private final CircularStructurer structurer = new CircularStructurer();
 
     private final Supplier<LocalDate> referenceDateSupplier;
 
@@ -85,18 +95,37 @@ public class NoticeParserService {
         if (size == 0) {
             throw new InvalidNoticeFormatException(sourceName, "file is empty");
         }
-        if (size > MAX_FILE_BYTES) {
+        long limit = maxBytesFor(sourceName);
+        if (size > limit) {
             throw new InvalidNoticeFormatException(sourceName,
-                    "file is " + size + " bytes; the limit is " + MAX_FILE_BYTES);
+                    "file is " + size + " bytes; the limit for this type is " + limit);
         }
-        return parse(sourceName, readContent(file, sourceName));
+        DocumentTextExtractor.Format format = DocumentTextExtractor.Format.of(file);
+        if (format == null) {
+            return parse(sourceName, readContent(file, sourceName), "TEXT");
+        }
+        return parse(sourceName, extractor.extract(file, format, sourceName), format.name());
+    }
+
+    /** Size limit that applies to a file of this name. */
+    public static long maxBytesFor(String fileName) {
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".pdf") || lower.endsWith(".docx") ? MAX_DOCUMENT_BYTES : MAX_FILE_BYTES;
     }
 
     /** Processes notice text that has already been read into memory. */
     public Notice parse(String sourceName, String content) throws InvalidNoticeFormatException, ExpiredDeadlineException {
+        return parse(sourceName, content, "TEXT");
+    }
+
+    private Notice parse(String sourceName, String content, String formatLabel)
+            throws InvalidNoticeFormatException, ExpiredDeadlineException {
         Objects.requireNonNull(content, "content");
         if (content.isBlank()) {
             throw new InvalidNoticeFormatException(sourceName, "file contains only whitespace");
+        }
+        if (!CircularStructurer.isStructuredAttempt(content)) {
+            content = structurer.structure(sourceName, content, formatLabel, referenceDateSupplier.get());
         }
         NoticeCategory category = detectCategory(sourceName, content);
         Notice notice = createNotice(category, sourceName, content, referenceDateSupplier.get());
@@ -115,6 +144,8 @@ public class NoticeParserService {
                 return new PlacementNotice(sourceName, content, today);
             case CLUB:
                 return new ClubNotice(sourceName, content, today);
+            case GENERAL:
+                return new GeneralNotice(sourceName, content, today);
             default:
                 throw new IllegalArgumentException("Unhandled category " + category);
         }
@@ -155,7 +186,7 @@ public class NoticeParserService {
                     String declared = line.substring(colon + 1).trim();
                     return NoticeCategory.fromLabel(declared).orElseThrow(() ->
                             new InvalidNoticeFormatException(sourceName,
-                                    "unknown TYPE '" + declared + "'; expected EXAM, PLACEMENT or CLUB"));
+                                    "unknown TYPE '" + declared + "'; expected EXAM, PLACEMENT, CLUB or GENERAL"));
                 }
             }
         }

@@ -5,6 +5,7 @@ import com.circularsync.exceptions.ExpiredDeadlineException;
 import com.circularsync.exceptions.InvalidNoticeFormatException;
 import com.circularsync.model.ClubNotice;
 import com.circularsync.model.ExamNotice;
+import com.circularsync.model.GeneralNotice;
 import com.circularsync.model.Notice;
 import com.circularsync.model.NoticeCategory;
 import com.circularsync.model.PlacementNotice;
@@ -13,9 +14,16 @@ import com.circularsync.service.NoticeParserService;
 import com.circularsync.service.NoticeRegistry;
 import com.circularsync.service.NoticeRegistry.RegistrationResult;
 import com.circularsync.web.FileActivityTracker;
+import com.circularsync.web.PortalSettings;
 import com.circularsync.web.WebPortalServer;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -36,10 +44,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Dependency-free test suite for CircularSync. Run with
- * {@code java -cp out com.circularsync.test.CircularSyncTestSuite}; the exit
+ * {@code java -cp "out:lib/*" com.circularsync.test.CircularSyncTestSuite}; the exit
  * code is the number of failed tests.
  */
 public final class CircularSyncTestSuite {
@@ -75,7 +85,14 @@ public final class CircularSyncTestSuite {
         test("registry survives concurrent registration", this::concurrentRegistration);
         test("daemon processes existing files through the worker pool", this::daemonInitialScan);
         test("daemon reacts to WatchService create and delete events", this::daemonWatchEvents);
+        test("infers an exam notice from a free-form circular", this::infersExamFromProse);
+        test("infers a placement notice from a Word document", this::infersPlacementFromDocx);
+        test("infers a club notice from a PDF", this::infersClubFromPdf);
+        test("falls back to GENERAL for administrative circulars", this::fallsBackToGeneral);
+        test("rejects a PDF without selectable text", this::rejectsTextlessPdf);
+        test("rejects a corrupt Word document", this::rejectsCorruptDocx);
         test("web portal uploads, tracks and serves the board", this::webPortalEndToEnd);
+        test("web portal requires the admin key for changes", this::webPortalAdminProtection);
 
         System.out.println();
         System.out.println(passed + " passed, " + failures.size() + " failed");
@@ -203,6 +220,127 @@ public final class CircularSyncTestSuite {
     }
 
     // ------------------------------------------------------------------
+    // Free-form circulars (PDF, DOCX, plain prose)
+    // ------------------------------------------------------------------
+
+    private void infersExamFromProse() throws Exception {
+        String letter = String.join("\n",
+                "ABC INSTITUTE OF TECHNOLOGY",
+                "Office of the Controller of Examinations",
+                "Ref: COE/2026/114",
+                "Date: 03/11/2026",
+                "NOTICE",
+                "Sub: Registration for Supplementary Examinations - MA201 Engineering Mathematics III",
+                "All students with a backlog in MA201 are informed that registration for the supplementary",
+                "examination is mandatory. Students must register at the examination section on or before",
+                "12th November 2026. The examination will be held on 20 November 2026 in Seminar Hall 2.",
+                "Controller of Examinations");
+        ExamNotice exam = (ExamNotice) parser.parse("supplementary.txt", letter);
+        check(exam.getTitle().startsWith("Registration for Supplementary Examinations"), "title from Sub: line, got " + exam.getTitle());
+        checkEquals(LocalDate.of(2026, 11, 3), exam.getIssueDate(), "issue date from Date: line");
+        checkEquals(LocalDate.of(2026, 11, 12), exam.getDeadline(), "deadline from 'on or before'");
+        checkEquals(LocalDate.of(2026, 11, 20), exam.getExamDate(), "exam date from 'held on'");
+        checkEquals("MA201", exam.getCourseCode(), "course code");
+        checkEquals("Re-Examination", exam.getExamType(), "exam type");
+        check(exam.getVenue().contains("Seminar Hall"), "venue, got " + exam.getVenue());
+        checkEquals("Controller of Examinations", exam.getIssuer(), "issuer from signature");
+        check(exam.getPriorityKeys().containsAll(List.of("mandatory", "re-exam", "backlog", "registration")),
+                "keywords, got " + exam.getPriorityKeys());
+        checkEquals("TEXT", exam.getHeaders().get("EXTRACTED_FROM"), "format recorded");
+        check(exam.getBody().contains("Seminar Hall 2"), "original text kept as body");
+    }
+
+    private void infersPlacementFromDocx() throws Exception {
+        Path dir = Files.createTempDirectory("circularsync-docx");
+        try {
+            Path docx = dir.resolve("drive.docx");
+            writeDocx(docx,
+                    "Training and Placement Cell",
+                    "Date: 04-11-2026",
+                    "Subject: Campus Recruitment Drive by Contoso Analytics Pvt Ltd",
+                    "Company: Contoso Analytics Pvt Ltd",
+                    "Role: Data Analyst",
+                    "Eligibility: B.Tech all branches, CGPA 6.5 and above",
+                    "Package: 8.5 LPA",
+                    "Interested final year students must register on the portal latest by 09.11.2026. "
+                            + "The drive will be conducted on 15/11/2026.",
+                    "Placement Officer");
+            PlacementNotice notice = (PlacementNotice) parser.parse(docx);
+            checkEquals("Contoso Analytics Pvt Ltd", notice.getCompany(), "company");
+            checkEquals("Data Analyst", notice.getRole(), "role");
+            checkEquals(8.5, notice.getPackageLpa(), "package");
+            checkEquals(6.5, notice.getMinCgpa(), "minimum CGPA");
+            checkEquals(LocalDate.of(2026, 11, 9), notice.getDeadline(), "deadline from 'latest by'");
+            checkEquals(LocalDate.of(2026, 11, 15), notice.getDriveDate(), "drive date");
+            checkEquals("DOCX", notice.getHeaders().get("EXTRACTED_FROM"), "format recorded");
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    private void infersClubFromPdf() throws Exception {
+        Path dir = Files.createTempDirectory("circularsync-pdf");
+        try {
+            Path pdf = dir.resolve("hackathon.pdf");
+            writePdf(pdf,
+                    "Coding Club",
+                    "Date: 2026-11-04",
+                    "Subject: Inter-college Hackathon 2026",
+                    "The Coding Club is organising a 24-hour hackathon on 21 November 2026",
+                    "at the Central Library. Registrations close on 15/11/2026.",
+                    "Limited seats: 120 participants. Certificates for all.",
+                    "Faculty Coordinator");
+            ClubNotice notice = (ClubNotice) parser.parse(pdf);
+            checkEquals("Inter-college Hackathon 2026", notice.getTitle(), "title");
+            checkEquals("Coding Club", notice.getClubName(), "club name");
+            checkEquals(LocalDate.of(2026, 11, 15), notice.getDeadline(), "deadline from 'close on'");
+            checkEquals(LocalDate.of(2026, 11, 21), notice.getEventDate(), "event date");
+            checkEquals(120, notice.getSeats(), "seats");
+            check(notice.getPriorityKeys().contains("hackathon"), "hackathon keyword");
+            checkEquals("PDF", notice.getHeaders().get("EXTRACTED_FROM"), "format recorded");
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    private void fallsBackToGeneral() throws Exception {
+        String letter = String.join("\n",
+                "Accounts Section",
+                "Date: 01/11/2026",
+                "Sub: Payment of tuition fees for the even term",
+                "Students are informed that the last date for payment of fees without fine is 30/11/2026.",
+                "Accounts Officer");
+        Notice notice = parser.parse("fees.txt", letter);
+        check(notice instanceof GeneralNotice, "general notice, got " + notice.getCategory());
+        checkEquals(LocalDate.of(2026, 11, 30), notice.getDeadline(), "deadline from 'last date'");
+        check(notice.getPriorityKeys().contains("fee"), "fee keyword");
+    }
+
+    private void rejectsTextlessPdf() throws Exception {
+        Path dir = Files.createTempDirectory("circularsync-pdf");
+        try {
+            Path pdf = dir.resolve("scan.pdf");
+            writePdf(pdf);
+            InvalidNoticeFormatException e = expect(InvalidNoticeFormatException.class, () -> parser.parse(pdf));
+            check(e.getMessage().contains("scanned"), "explains scanned PDFs: " + e.getMessage());
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    private void rejectsCorruptDocx() throws Exception {
+        Path dir = Files.createTempDirectory("circularsync-docx");
+        try {
+            Path docx = dir.resolve("broken.docx");
+            write(docx, "this is not a zip archive");
+            expect(InvalidNoticeFormatException.class, () -> parser.parse(docx));
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+
+    // ------------------------------------------------------------------
     // Registry tests
     // ------------------------------------------------------------------
 
@@ -308,7 +446,7 @@ public final class CircularSyncTestSuite {
             write(dir.resolve("club.md"), club("2026-12-01"));
             write(dir.resolve("broken.txt"), "TITLE: no type here\n---\nbody\n");
             write(dir.resolve("expired.txt"), exam("Old", "2026-11-02", "mandatory"));
-            write(dir.resolve("ignored.pdf"), "not a notice");
+            write(dir.resolve("ignored.doc"), "legacy Word files are not supported");
 
             NoticeRegistry registry = new NoticeRegistry();
             DirectoryWatcherDaemon.Statistics stats;
@@ -365,8 +503,9 @@ public final class CircularSyncTestSuite {
             FileActivityTracker tracker = new FileActivityTracker();
             try (AuditLogger audit = new AuditLogger(logs);
                  DirectoryWatcherDaemon daemon = new DirectoryWatcherDaemon(dir, parser, registry, audit, 2);
-                 WebPortalServer portal = new WebPortalServer(0, Paths.get("web"), demo, registry, daemon,
-                         tracker, audit, () -> TODAY)) {
+                 WebPortalServer portal = new WebPortalServer(
+                         new PortalSettings("127.0.0.1", 0, Paths.get("web"), demo, null, false),
+                         registry, daemon, tracker, audit, () -> TODAY)) {
                 daemon.addProcessingListener(tracker);
                 portal.start();
                 daemon.start();
@@ -380,7 +519,8 @@ public final class CircularSyncTestSuite {
                 checkEquals(202, post(http, base + "api/upload?name=web_exam.txt", exam("Web upload", "2026-11-20", "mandatory")), "upload accepted");
                 checkEquals(202, post(http, base + "api/upload?name=web_broken.txt", "TYPE: EXAM\n---\nbody\n"), "broken upload accepted");
                 checkEquals(400, post(http, base + "api/upload?name=..%2Fescape.txt", "x"), "path traversal refused");
-                checkEquals(415, post(http, base + "api/upload?name=report.pdf", "x"), "unsupported type refused");
+                checkEquals(415, post(http, base + "api/upload?name=report.exe", "x"), "unsupported type refused");
+                checkEquals(415, post(http, base + "api/upload?name=fake.pdf", "MZ not really a pdf"), "fake PDF refused");
                 checkEquals(202, post(http, base + "api/demo?name=demo_club.txt", ""), "demo drop accepted");
 
                 waitUntil(() -> registry.size() == 2, Duration.ofSeconds(20), "uploaded and demo notices indexed");
@@ -404,9 +544,55 @@ public final class CircularSyncTestSuite {
         }
     }
 
+    private void webPortalAdminProtection() throws Exception {
+        Path dir = Files.createTempDirectory("circularsync-web");
+        Path logs = Files.createTempDirectory("circularsync-logs");
+        HttpClient http = HttpClient.newHttpClient();
+        String key = "test-admin-key-123";
+        try {
+            NoticeRegistry registry = new NoticeRegistry();
+            FileActivityTracker tracker = new FileActivityTracker();
+            try (AuditLogger audit = new AuditLogger(logs);
+                 DirectoryWatcherDaemon daemon = new DirectoryWatcherDaemon(dir, parser, registry, audit, 2);
+                 WebPortalServer portal = new WebPortalServer(
+                         new PortalSettings("127.0.0.1", 0, Paths.get("web"), dir, key, false),
+                         registry, daemon, tracker, audit, () -> TODAY)) {
+                daemon.addProcessingListener(tracker);
+                portal.start();
+                daemon.start();
+                String base = portal.getUrl();
+                String notice = exam("Protected", "2026-11-20", "mandatory");
+
+                checkEquals(401, post(http, base + "api/upload?name=a.txt", notice), "upload without key refused");
+                checkEquals(401, post(http, base + "api/upload?name=a.txt", notice, "wrong-key"), "wrong key refused");
+                check(get(http, base + "api/state").contains("\"isAdmin\":false"), "anonymous viewer is not admin");
+                checkEquals(200, http.send(HttpRequest.newBuilder(URI.create(base + "api/state")).build(),
+                        HttpResponse.BodyHandlers.ofString()).statusCode(), "board stays public");
+
+                checkEquals(202, post(http, base + "api/upload?name=a.txt", notice, key), "upload with key accepted");
+                waitUntil(() -> registry.size() == 1, Duration.ofSeconds(20), "admin upload indexed");
+
+                for (int i = 0; i < 10; i++) {
+                    post(http, base + "api/upload?name=a.txt", notice, "guess-" + i);
+                }
+                checkEquals(429, post(http, base + "api/upload?name=a.txt", notice, key), "locked out after repeated wrong keys");
+            }
+        } finally {
+            deleteTree(dir);
+            deleteTree(logs);
+        }
+    }
+
     private static int post(HttpClient http, String url, String body) throws IOException, InterruptedException {
-        return http.send(HttpRequest.newBuilder(URI.create(url)).POST(HttpRequest.BodyPublishers.ofString(body)).build(),
-                HttpResponse.BodyHandlers.ofString()).statusCode();
+        return post(http, url, body, null);
+    }
+
+    private static int post(HttpClient http, String url, String body, String adminKey) throws IOException, InterruptedException {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url)).POST(HttpRequest.BodyPublishers.ofString(body));
+        if (adminKey != null) {
+            request.header(WebPortalServer.ADMIN_HEADER, adminKey);
+        }
+        return http.send(request.build(), HttpResponse.BodyHandlers.ofString()).statusCode();
     }
 
     private static String get(HttpClient http, String url) {
@@ -460,6 +646,47 @@ public final class CircularSyncTestSuite {
 
     private static void write(Path file, String content) throws IOException {
         Files.write(file, content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Writes a minimal but valid .docx containing one paragraph per argument. */
+    private static void writeDocx(Path file, String... paragraphs) throws IOException {
+        StringBuilder body = new StringBuilder();
+        for (String paragraph : paragraphs) {
+            body.append("<w:p><w:r><w:t xml:space=\"preserve\">")
+                    .append(paragraph.replace("&", "&amp;").replace("<", "&lt;"))
+                    .append("</w:t></w:r></w:p>");
+        }
+        try (OutputStream out = Files.newOutputStream(file); ZipOutputStream zip = new ZipOutputStream(out)) {
+            zip.putNextEntry(new ZipEntry("[Content_Types].xml"));
+            zip.write(("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+                    + "<Default Extension=\"xml\" ContentType=\"application/xml\"/></Types>").getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("word/document.xml"));
+            zip.write(("<?xml version=\"1.0\" encoding=\"UTF-8\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+                    + "<w:body>" + body + "</w:body></w:document>").getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+    }
+
+    /** Writes a one-page PDF with one line of Helvetica text per argument (no arguments: a blank page). */
+    private static void writePdf(Path file, String... lines) throws IOException {
+        try (PDDocument document = new PDDocument()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            if (lines.length > 0) {
+                try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                    content.beginText();
+                    content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 11);
+                    content.newLineAtOffset(50, 740);
+                    for (String line : lines) {
+                        content.showText(line);
+                        content.newLineAtOffset(0, -16);
+                    }
+                    content.endText();
+                }
+            }
+            document.save(file.toFile());
+        }
     }
 
     private static void deleteTree(Path root) throws IOException {

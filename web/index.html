@@ -20,6 +20,7 @@
     --exam: #4f46e5;      --exam-soft: #eef0ff;
     --placement: #0d9488; --placement-soft: #e6f6f4;
     --club: #c2410c;      --club-soft: #fdf0e8;
+    --general: #475569;   --general-soft: #eef1f5;
     --ok: #15803d;        --ok-soft: #e8f6ec;
     --warn: #b45309;      --warn-soft: #fdf3e2;
     --bad: #c81e1e;       --bad-soft: #fdeaea;
@@ -36,6 +37,7 @@
       --exam: #8b85ff; --exam-soft: #23224a;
       --placement: #2dd4bf; --placement-soft: #12302d;
       --club: #fb923c; --club-soft: #33210f;
+      --general: #94a3b8; --general-soft: #222a36;
       --ok: #4ade80; --ok-soft: #13301d; --warn: #fbbf24; --warn-soft: #33280e;
       --bad: #f87171; --bad-soft: #3a1717; --info: #60a5fa; --info-soft: #14253f;
       --shadow: 0 1px 2px rgba(0,0,0,.3); --shadow-lg: 0 12px 32px rgba(0,0,0,.5);
@@ -48,6 +50,7 @@
     --exam: #8b85ff; --exam-soft: #23224a;
     --placement: #2dd4bf; --placement-soft: #12302d;
     --club: #fb923c; --club-soft: #33210f;
+    --general: #94a3b8; --general-soft: #222a36;
     --ok: #4ade80; --ok-soft: #13301d; --warn: #fbbf24; --warn-soft: #33280e;
     --bad: #f87171; --bad-soft: #3a1717; --info: #60a5fa; --info-soft: #14253f;
     --shadow: 0 1px 2px rgba(0,0,0,.3); --shadow-lg: 0 12px 32px rgba(0,0,0,.5);
@@ -78,7 +81,7 @@
   .theme-btn { border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px; width: 32px; height: 32px; display: grid; place-items: center; }
 
   /* Stats */
-  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin: 22px 0 18px; }
+  .stats { display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; margin: 22px 0 18px; }
   .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
   .stat .label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .stat .label i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
@@ -177,6 +180,26 @@
   .notice.EXAM { --c: var(--exam); --cs: var(--exam-soft); }
   .notice.PLACEMENT { --c: var(--placement); --cs: var(--placement-soft); }
   .notice.CLUB { --c: var(--club); --cs: var(--club-soft); }
+  .notice.GENERAL { --c: var(--general); --cs: var(--general-soft); }
+  .fmt { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); background: var(--surface-2); }
+  .auto { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+  .auto::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+  .inferred-note { font-size: 12.5px; color: var(--muted); background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; margin: 0 0 16px; }
+  .open-original { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--accent); text-decoration: none; font-size: 13px; margin-bottom: 14px; }
+  .admin-btn { border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px; height: 32px; padding: 0 12px; font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+  .admin-btn.on { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+  .drop.locked { cursor: default; opacity: .75; }
+  .drop.locked:hover { border-color: var(--border); background: var(--surface); }
+  .modal { position: fixed; inset: 0; display: none; place-items: center; z-index: 70; background: rgba(10, 12, 16, .45); }
+  .modal.open { display: grid; }
+  .modal .box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 22px; width: min(380px, calc(100% - 32px)); }
+  .modal h3 { margin: 0 0 4px; font-size: 16px; }
+  .modal p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  .modal input { width: 100%; height: 40px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 10px; padding: 0 12px; font: inherit; outline: none; }
+  .modal input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+  .btn { height: 36px; padding: 0 14px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); font-weight: 600; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .rank { font-size: 20px; font-weight: 700; color: var(--faint); text-align: center; font-variant-numeric: tabular-nums; }
   .ring {
     width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center;
@@ -242,7 +265,7 @@
   footer { color: var(--faint); font-size: 12px; text-align: center; padding: 28px 0 34px; }
 
   @media (max-width: 980px) {
-    .stats { grid-template-columns: repeat(3, 1fr); }
+    .stats { grid-template-columns: repeat(4, 1fr); }
     .upload-grid, .board-grid { grid-template-columns: 1fr; }
   }
   @media (max-width: 640px) {
@@ -272,6 +295,10 @@
     </div>
     <div style="display:flex;align-items:center;gap:14px">
       <div class="live" id="live"><span class="dot"></span><span id="liveText">Connecting...</span></div>
+      <button class="admin-btn" id="adminBtn" style="display:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        <span id="adminLabel">Admin sign-in</span>
+      </button>
       <button class="theme-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
       </button>
@@ -285,8 +312,9 @@
     <div class="stat"><div class="label"><i style="background:var(--exam)"></i>Exams</div><div class="value" id="sExam">0</div></div>
     <div class="stat"><div class="label"><i style="background:var(--placement)"></i>Placements</div><div class="value" id="sPlacement">0</div></div>
     <div class="stat"><div class="label"><i style="background:var(--club)"></i>Clubs</div><div class="value" id="sClub">0</div></div>
+    <div class="stat"><div class="label"><i style="background:var(--general)"></i>General</div><div class="value" id="sGeneral">0</div></div>
     <div class="stat"><div class="label"><i style="background:var(--bad)"></i>Rejected</div><div class="value" id="sRejected">0</div></div>
-    <div class="stat"><div class="label">Files processed</div><div class="value" id="sFiles">0</div></div>
+    <div class="stat"><div class="label">Files seen</div><div class="value" id="sFilesSeen">0</div></div>
   </section>
 
   <nav class="tabs" role="tablist">
@@ -304,12 +332,12 @@
   <section class="panel active" id="panel-uploads">
     <div class="upload-grid">
       <label class="drop" id="drop">
-        <input type="file" id="fileInput" accept=".txt,.md" multiple hidden>
+        <input type="file" id="fileInput" accept=".pdf,.docx,.txt,.md" multiple hidden>
         <div class="icon">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M20 16v3a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-3"/></svg>
         </div>
-        <h3>Drop notice files here</h3>
-        <p>or <span class="browse">browse</span> &middot; .txt or .md, up to 256 KB</p>
+        <h3 id="dropTitle">Drop circulars here</h3>
+        <p id="dropHint">or <span class="browse">browse</span> &middot; PDF, Word (.docx), .txt or .md &middot; up to 15 MB</p>
         <p style="margin-top:10px;font-size:12px">Files go into <code id="dirName">incoming_notices</code> and are picked up by the WatchService</p>
       </label>
       <div class="card">
@@ -342,6 +370,7 @@
         <button data-cat="EXAM">Exam</button>
         <button data-cat="PLACEMENT">Placement</button>
         <button data-cat="CLUB">Club</button>
+        <button data-cat="GENERAL">General</button>
       </div>
       <select id="due" aria-label="Deadline window">
         <option value="">Any deadline</option>
@@ -377,6 +406,18 @@
   <div class="content" id="dContent"></div>
 </aside>
 
+<div class="modal" id="adminModal" role="dialog" aria-modal="true" aria-labelledby="adminTitle">
+  <form class="box" id="adminForm">
+    <h3 id="adminTitle">Admin sign-in</h3>
+    <p>Uploading and deleting circulars is limited to the administrator. Everyone can view the board.</p>
+    <input type="password" id="adminInput" placeholder="Admin key" autocomplete="current-password" required>
+    <div class="row">
+      <button type="button" class="btn" id="adminCancel">Cancel</button>
+      <button type="submit" class="btn primary">Sign in</button>
+    </div>
+  </form>
+</div>
+
 <div class="toasts" id="toasts"></div>
 
 <script>
@@ -399,10 +440,18 @@
     [/hackathon/i, 'Valid Markdown club notice'],
     [/re-?exam|urgent/i, 'Urgent exam, due tomorrow'],
     [/broken|invalid/i, 'Missing headers, will be rejected'],
-    [/expired/i, 'Deadline already passed']
+    [/expired/i, 'Deadline already passed'],
+    [/\.pdf$/i, 'PDF circular, fields auto-detected'],
+    [/\.docx$/i, 'Word circular, fields auto-detected']
   ];
 
   const filters = { q: '', category: '', due: '' };
+  let adminKey = '';
+  try { adminKey = sessionStorage.getItem('cs-admin') || ''; } catch (e) { /* storage unavailable */ }
+  let adminRequired = false;
+  let isAdmin = true;
+  const auth = (extra) => Object.assign({}, extra || {}, adminKey ? { 'X-Admin-Key': adminKey } : {});
+  const canWrite = () => !adminRequired || isAdmin;
   let lastStateKey = '';
   let lastFilesKey = '';
   let lastBoardKey = '';
@@ -445,21 +494,78 @@
     while ($('toasts').children.length > 4) $('toasts').firstChild.remove();
   }
 
+  // ---------------- Admin ----------------
+  function openAdmin() {
+    $('adminModal').classList.add('open');
+    $('adminInput').value = '';
+    setTimeout(() => $('adminInput').focus(), 30);
+  }
+  function closeAdmin() { $('adminModal').classList.remove('open'); }
+  $('adminBtn').addEventListener('click', () => {
+    if (isAdmin && adminRequired) {
+      adminKey = '';
+      try { sessionStorage.removeItem('cs-admin'); } catch (e) { /* ignore */ }
+      toast('info', 'Signed out', 'You are now viewing the board only');
+      refresh();
+    } else {
+      openAdmin();
+    }
+  });
+  $('adminCancel').addEventListener('click', closeAdmin);
+  $('adminModal').addEventListener('click', (e) => { if (e.target === $('adminModal')) closeAdmin(); });
+  $('adminForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    adminKey = $('adminInput').value.trim();
+    closeAdmin();
+    await refresh(true);
+    if (isAdmin) {
+      try { sessionStorage.setItem('cs-admin', adminKey); } catch (err) { /* ignore */ }
+      toast('ok', 'Signed in as admin', 'You can now upload and delete circulars');
+    } else {
+      adminKey = '';
+      toast('bad', 'Wrong admin key', 'The key was not accepted');
+    }
+  });
+  function handleAuthError(res) {
+    if (res.status === 401) {
+      adminKey = '';
+      try { sessionStorage.removeItem('cs-admin'); } catch (e) { /* ignore */ }
+      toast('bad', 'Admin key required', 'Sign in as admin to change notices');
+      openAdmin();
+      return true;
+    }
+    return false;
+  }
+  function applyAccess() {
+    const btn = $('adminBtn');
+    btn.style.display = adminRequired ? 'inline-flex' : 'none';
+    btn.classList.toggle('on', adminRequired && isAdmin);
+    $('adminLabel').textContent = isAdmin ? 'Admin \u00b7 sign out' : 'Admin sign-in';
+    const locked = !canWrite();
+    drop.classList.toggle('locked', locked);
+    $('dropTitle').textContent = locked ? 'Uploads are limited to the administrator' : 'Drop circulars here';
+    $('dropHint').innerHTML = locked
+      ? 'Use <b>Admin sign-in</b> at the top right to upload. Everyone can browse the Notice Board.'
+      : 'or <span class="browse">browse</span> &middot; PDF, Word (.docx), .txt or .md &middot; up to 15 MB';
+  }
+
   // ---------------- Uploads ----------------
   const drop = $('drop');
-  ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); if (canWrite()) drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
-  drop.addEventListener('drop', (e) => uploadFiles(e.dataTransfer.files));
+  drop.addEventListener('drop', (e) => { if (canWrite()) uploadFiles(e.dataTransfer.files); else openAdmin(); });
+  drop.addEventListener('click', (e) => { if (!canWrite()) { e.preventDefault(); openAdmin(); } });
   $('fileInput').addEventListener('change', (e) => { uploadFiles(e.target.files); e.target.value = ''; });
 
   async function uploadFiles(fileList) {
     for (const file of Array.from(fileList)) {
-      if (!/\.(txt|md)$/i.test(file.name)) {
-        toast('bad', 'Not uploaded', file.name + ' is not a .txt or .md file');
+      if (!/\.(pdf|docx|txt|md)$/i.test(file.name)) {
+        toast('bad', 'Not uploaded', file.name + ' is not a PDF, .docx, .txt or .md file');
         continue;
       }
       try {
-        const res = await fetch('/api/upload?name=' + encodeURIComponent(file.name), { method: 'POST', body: file });
+        const res = await fetch('/api/upload?name=' + encodeURIComponent(file.name), { method: 'POST', body: file, headers: auth() });
+        if (handleAuthError(res)) return;
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           toast('bad', 'Upload failed', file.name + ': ' + (err.error || res.status));
@@ -472,7 +578,8 @@
   }
 
   async function dropDemo(name) {
-    const res = await fetch('/api/demo?name=' + encodeURIComponent(name), { method: 'POST' });
+    const res = await fetch('/api/demo?name=' + encodeURIComponent(name), { method: 'POST', headers: auth() });
+    if (handleAuthError(res)) { loadDemos(); return; }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       toast('bad', 'Demo drop failed', err.error || String(res.status));
@@ -482,7 +589,8 @@
   }
 
   async function deleteFile(name) {
-    const res = await fetch('/api/files?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    const res = await fetch('/api/files?name=' + encodeURIComponent(name), { method: 'DELETE', headers: auth() });
+    if (handleAuthError(res)) { refresh(); return; }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       toast('bad', 'Could not delete', err.error || String(res.status));
@@ -498,9 +606,10 @@
       if (!demos.length) { list.innerHTML = '<div class="empty">No demo folder found</div>'; return; }
       list.innerHTML = demos.map((d) => {
         const hint = (DEMO_HINTS.find(([re]) => re.test(d.name)) || [null, 'Sample notice'])[1];
-        return '<button class="demo" data-demo="' + esc(d.name) + '"' + (d.inFolder ? ' disabled' : '') + '>' +
+        const locked = !canWrite();
+        return '<button class="demo" data-demo="' + esc(d.name) + '"' + (d.inFolder || locked ? ' disabled' : '') + '>' +
           '<div class="meta"><b>' + esc(d.name) + '</b><small>' + esc(hint) + '</small></div>' +
-          '<span class="go">' + (d.inFolder ? 'In folder' : 'Drop in &rarr;') + '</span></button>';
+          '<span class="go">' + (d.inFolder ? 'In folder' : locked ? 'Admin only' : 'Drop in &rarr;') + '</span></button>';
       }).join('');
     } catch (e) { /* retried on next refresh */ }
   }
@@ -531,9 +640,10 @@
       } else {
         result = '<div class="msg">' + esc(f.message) + '</div>';
       }
-      const canDelete = latestId[f.name] === f.id && f.status !== 'REMOVED';
+      const canDelete = canWrite() && latestId[f.name] === f.id && f.status !== 'REMOVED';
+      const ext = (f.name.match(/\.([a-z0-9]+)$/i) || [null, ''])[1].toUpperCase();
       return '<tr class="' + (fresh ? 'fresh' : '') + '">' +
-        '<td><div class="fname">' + esc(f.name) + '</div><div class="src">' + esc(SOURCE[f.source] || f.source) + '</div></td>' +
+        '<td><div class="fname">' + esc(f.name) + '</div><div class="src"><span class="fmt">' + esc(ext) + '</span> ' + esc(SOURCE[f.source] || f.source) + '</div></td>' +
         '<td class="hide-sm muted">' + fmtSize(f.size) + '</td>' +
         '<td class="hide-sm muted">' + fmtTime(f.receivedAt) + '</td>' +
         '<td><span class="pill ' + st.cls + '">' + (st.spin ? '<span class="spin"></span>' : '') + esc(st.label) + '</span></td>' +
@@ -575,7 +685,9 @@
         '<div class="rank">' + n.rank + '</div>' +
         '<div class="ring" style="--p:' + n.score + '"><b>' + n.score + '</b></div>' +
         '<div class="n-body">' +
-          '<div class="n-top"><span class="cat">' + esc(n.category) + '</span><span class="nid mono">' + esc(n.id) + '</span></div>' +
+          '<div class="n-top"><span class="cat">' + esc(n.category) + '</span><span class="nid mono">' + esc(n.id) + '</span>' +
+            (n.extractedFrom && n.extractedFrom !== 'TEXT' ? '<span class="fmt">' + esc(n.extractedFrom) + '</span>' : '') +
+            (n.inferredFields && n.inferredFields.length ? '<span class="auto">auto-detected</span>' : '') + '</div>' +
           '<p class="n-title">' + esc(n.title) + '</p>' +
           '<div class="facts">' + facts + '</div>' +
           '<div class="chips">' + n.keywords.map((k) => '<span class="chip">' + esc(k) + '</span>').join('') + '</div>' +
@@ -638,18 +750,41 @@
         ['Deadline', esc(fmtDate(n.deadline)) + ' &nbsp;<span class="pill ' + due.cls + '">' + due.text + '</span>'],
         ['Issued', esc(fmtDate(n.issueDate))],
         ['Issuer', esc(n.issuer)]
-      ].concat(n.facts.map((f) => [esc(f.label), esc(f.value)]))
+      ].concat(n.facts.filter((f) => f.label !== 'Issued by').map((f) => [esc(f.label), esc(f.value)]))
        .concat([['Keywords', n.keywords.map((k) => '<span class="chip">' + esc(k) + '</span>').join(' ')], ['Source file', '<span class="mono">' + esc(n.source) + '</span>']]);
-      $('dContent').innerHTML =
+      const original = n.sourceAvailable
+        ? '<a class="open-original" href="/api/file?name=' + encodeURIComponent(n.source) + '" target="_blank" rel="noopener">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7M10 14 21 3M21 14v7H3V3h7"/></svg>' +
+          'Open original ' + esc((n.extractedFrom && n.extractedFrom !== 'TEXT') ? n.extractedFrom : 'file') + '</a>'
+        : '';
+      const inferredNote = n.inferredFields && n.inferredFields.length
+        ? '<p class="inferred-note">Read automatically from a free-form ' + esc(n.extractedFrom === 'TEXT' ? 'text' : n.extractedFrom) +
+          ' circular. Auto-detected: <b>' + esc(n.inferredFields.join(', ')) + '</b>. Check the original if something looks off.</p>'
+        : '';
+      $('dContent').innerHTML = original + inferredNote +
         '<dl class="kv">' + rows.map((r) => '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>').join('') + '</dl>' +
         '<p class="score-explain">The score combines a category base, deadline urgency and weighted keywords, computed by the overridden calculatePriorityScore() of this notice type.</p>' +
-        '<div class="body-text">' + esc(n.body.replace(/\r/g, '').replace(/([^\n])\n(?!\n)/g, '$1 ')) + '</div>';
+        '<div class="body-text">' + esc(reflow(n.body)) + '</div>';
       $('scrim').classList.add('open');
       $('drawer').setAttribute('aria-hidden', 'false');
     } catch (e) {
       toast('bad', 'Could not load notice', String(e));
     }
   }
+  /** Joins hard-wrapped lines into paragraphs but keeps short lines such as letterheads and signatures. */
+  function reflow(body) {
+    const lines = body.replace(/\r/g, '').split('\n');
+    let out = '';
+    lines.forEach((line, i) => {
+      out += line;
+      const next = lines[i + 1];
+      if (next === undefined) return;
+      const wrapped = line.trim().length >= 60 && /^[a-z0-9(]/.test(next.trim());
+      out += wrapped ? ' ' : '\n';
+    });
+    return out;
+  }
+
   function closeDrawer() {
     $('drawer').classList.remove('open');
     $('scrim').classList.remove('open');
@@ -676,19 +811,23 @@
 
   // ---------------- Polling ----------------
   let inflight = false;
-  async function refresh() {
-    if (inflight) return;
+  async function refresh(force) {
+    if (inflight && !force) return;
     inflight = true;
     try {
       const params = new URLSearchParams(filters);
-      const res = await fetch('/api/state?' + params.toString(), { cache: 'no-store' });
+      const res = await fetch('/api/state?' + params.toString(), { cache: 'no-store', headers: auth() });
       if (!res.ok) throw new Error(res.status);
       const s = await res.json();
       failures = 0;
+      const accessChanged = adminRequired !== s.adminRequired || isAdmin !== s.isAdmin;
+      adminRequired = s.adminRequired;
+      isAdmin = s.isAdmin;
+      if (accessChanged) { applyAccess(); lastFilesKey = ''; loadDemos(); }
       $('live').classList.remove('down');
-      $('liveText').innerHTML = 'Live <span class="detail">&middot; watching <code>' + esc(s.watchDirectory.split(/[\\/]/).pop()) +
+      $('liveText').innerHTML = 'Live <span class="detail">&middot; watching <code>' + esc(s.watchDirectory) +
         '</code> &middot; ' + s.workers + ' workers &middot; reference date ' + esc(s.referenceDate) + '</span>';
-      $('dirName').textContent = s.watchDirectory.split(/[\\/]/).pop();
+      $('dirName').textContent = s.watchDirectory;
 
       const key = JSON.stringify(s.stats);
       if (key !== lastStateKey) {
@@ -697,10 +836,11 @@
         $('sExam').textContent = s.stats.exam;
         $('sPlacement').textContent = s.stats.placement;
         $('sClub').textContent = s.stats.club;
+        $('sGeneral').textContent = s.stats.general;
         $('sRejected').textContent = s.stats.rejectedFormat + s.stats.rejectedExpired;
       }
-      $('sFiles').textContent = s.files.length;
       $('bUploads').textContent = s.files.length;
+      $('sFilesSeen').textContent = s.files.length;
       $('bBoard').textContent = s.stats.active;
 
       const fk = JSON.stringify(s.files);

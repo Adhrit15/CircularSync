@@ -1,0 +1,14 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# In the Render dashboard choose New > Blueprint, pick this repository, and
+# Render builds the Dockerfile and keeps the portal online.
+services:
+  - type: web
+    name: circularsync
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      # Random admin key generated once by Render. Read it in the dashboard
+      # under Environment, then enter it in the portal's "Admin sign-in".
+      - key: CIRCULARSYNC_ADMIN_KEY
+        generateValue: true

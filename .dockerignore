@@ -1,0 +1,8 @@
+.git
+out
+lib
+audit_logs
+*.class
+*.tmp
+.idea
+.vscode

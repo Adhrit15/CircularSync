@@ -14,7 +14,7 @@ $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
 .\build.bat
 ```
 
-You should see `18 passed, 0 failed`. That is your first talking point: the
+You should see `26 passed, 0 failed`. That is your first talking point: the
 project has an automated test suite and it passes.
 
 Always pass `--today 2026-11-04` in the commands below. The sample notices
@@ -46,12 +46,42 @@ come from the same daemon.
    Exam / Placement / Club filters, pick *Due in 2 days*, and click any card to
    open its full details. The *Pipeline activity* feed on the right shows each
    event as it happens.
-6. **Uploads: click Delete** on `1_hackathon.md`. It becomes *Withdrawn* and
+6. **Real-world formats: drop `5_scholarship_circular.pdf` and
+   `6_placement_drive.docx`.** These are free-form letters with no special
+   headers, like real circulars. The PDF becomes a *General* notice (deadline
+   read from "on or before 18th November 2026"); the Word file becomes a
+   *Placement* notice with company, role, 12 LPA package, deadline and drive
+   date all detected (score 85). On the board they carry a *PDF* / *DOCX* chip
+   and an *auto-detected* marker; the detail panel lists which fields were
+   inferred and has an **Open original PDF** link. Say: "Most circulars arrive
+   as PDF or Word letters, so the system reads them the way a person would."
+7. **Uploads: click Delete** on `1_hackathon.md`. It becomes *Withdrawn* and
    leaves the board.
 
 To stop, type `quit` in the terminal (or press Ctrl+C and answer `Y`). To
 reset, delete the demo rows with the Delete buttons before quitting, or remove
 the demo files from `incoming_notices` afterwards.
+
+## Option A2: show it on the public internet
+
+To let the audience open the portal on their own phones:
+
+```
+.\run.bat web --public --trust-proxy
+```
+
+and in a second terminal:
+
+```
+& "$env:LOCALAPPDATA\cloudflared\cloudflared.exe" tunnel --url http://localhost:8080
+```
+
+The second window prints a `https://<random>.trycloudflare.com` address; share
+it (or show it as a QR code). The first window prints the **admin key**. Anyone
+can browse the board, but only someone signed in with that key (top-right
+*Admin sign-in*) can upload or delete. The address changes every time the
+tunnel restarts. For a permanent address, deploy to Render as described in
+README.md.
 
 ## Option B: terminal-only demo
 
