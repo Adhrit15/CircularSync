@@ -1,26 +1,30 @@
 CIRCULARSYNC: AN AUTOMATED CAMPUS CIRCULAR PARSING DAEMON AND QUERY SYSTEM
 
 A Project Report on the Design and Implementation of a Concurrent,
-File-System-Driven Notice Management Engine in Java
+File-System-Driven Notice Management Engine and Web Portal in Java
 
 November 2026
 
 
 ABSTRACT
 
-Colleges issue a large volume of circulars every semester through many
-unstructured channels, and these circulars are rarely ranked by urgency, so
-students routinely miss deadlines with academic or career consequences. This
-report presents CircularSync, a Java application that treats every circular as
-a structured document dropped into a monitored directory. A daemon built on the
-Java NIO WatchService detects new files in real time, a fixed-size thread pool
-fed by a blocking queue parses and validates them concurrently, and a
-thread-safe in-memory registry keeps every active notice sorted by priority and
-deadline. Notices are modelled through an abstract base class with three
-subclasses, an interface defining the processing contract, and custom checked
-exceptions that make every failure explicit. All outcomes are recorded in an
-asynchronous audit log. The system was verified with an eighteen-case
-automated test suite and live runs, and placed under Git version control.
+Colleges issue a large volume of circulars every semester, mostly as PDF and
+Word letters spread across unstructured channels, and these circulars are
+rarely ranked by urgency, so students routinely miss deadlines with academic or
+career consequences. This report presents CircularSync, a Java application that
+treats every circular as a document dropped into a monitored directory. A
+daemon built on the Java NIO WatchService detects new files in real time, a
+fixed-size thread pool fed by a blocking queue extracts, validates and indexes
+them concurrently, and a thread-safe in-memory registry keeps every active
+notice sorted by priority and deadline. Text is extracted from PDF and Word
+documents, and a heuristic structuring stage infers the category, title, dates,
+deadline and type-specific details of free-form letters. Notices are modelled
+through an abstract base class with four subclasses, an interface defining the
+processing contract, and custom checked exceptions. A web portal built on the
+JDK's HTTP server shows uploads and the ranked board live, and can be published
+on the internet with password-protected administration. The system was verified
+with a twenty-six-case automated test suite, browser testing and a live public
+deployment, and is maintained under Git version control.
 
 
 CHAPTER 1: INTRODUCTION AND PROBLEM STATEMENT
@@ -30,12 +34,13 @@ CHAPTER 1: INTRODUCTION AND PROBLEM STATEMENT
 An engineering college of moderate size issues several hundred circulars in an
 academic year. The Controller of Examinations publishes schedules and
 hall-ticket instructions, the Training and Placement Cell announces recruitment
-drives with tight registration windows, and student clubs advertise workshops
-and competitions. Each office chooses its own medium: a page on a notice board,
-an email attachment, a message in a class group or a post on the college
-portal. Information that is individually well written becomes collectively
-chaotic. Students miss hall-ticket windows, register late for placement drives
-and learn about workshops after the seats are full.
+drives with tight registration windows, student clubs advertise workshops and
+competitions, and administrative offices announce fees, scholarships and
+holidays. Most of these circulars are written as formal letters and distributed
+as PDF or Word files through notice boards, email, class messaging groups and
+the college portal. Information that is individually well written becomes
+collectively chaotic: students miss hall-ticket windows, register late for
+placement drives and learn about workshops after the seats are full.
 
 1.2 Bottlenecks in the Existing Process
 
@@ -45,25 +50,28 @@ prose and cannot be extracted mechanically. Second, there is no
 prioritisation: an optional quiz and a mandatory end-semester examination
 arrive with the same visual weight. Third, there is no single queryable store,
 so a student cannot simply ask which deadlines fall within the next week. A
-quieter weakness is the lack of accountability: when a circular is corrected
-or withdrawn, there is no record of when the change happened.
+quieter weakness is the lack of accountability: when a circular is corrected or
+withdrawn, there is no record of when the change happened.
 
 1.3 Objectives
 
-CircularSync was designed to accept circulars in a simple, human-editable
-structured format in plain text or Markdown; to detect new or edited circulars
-automatically within seconds; to process many circulars concurrently so that
-bursts do not create a backlog; to reject malformed and expired circulars with
-a clear explanation; to rank active circulars by a transparent priority score;
-to answer queries by category, keyword, deadline window and identifier; and to
-record every event in a durable audit trail.
+CircularSync was designed to accept circulars in the formats in which they are
+actually published, PDF and Word, as well as a simple structured text format;
+to read free-form letters without requiring issuing offices to change how they
+write; to detect new or edited circulars automatically within seconds; to
+process many circulars concurrently; to reject unusable and expired circulars
+with a clear explanation; to rank active circulars by a transparent priority
+score; to present the results in a clear web interface that can be opened from
+any device; to restrict changes to an administrator when the portal is public;
+and to record every event in a durable audit trail.
 
 1.4 Scope
 
-The project delivers a command-line application in standard Java with no
-third-party libraries, covering three categories: examination, placement and
-club notices. Extraction from unstructured PDFs, authentication and graphical
-interfaces are left as future work.
+The project delivers a Java application whose only third-party dependency is
+Apache PDFBox for PDF text extraction. It covers four categories: examination,
+placement, club and general administrative notices. Optical character
+recognition for scanned PDFs, persistent database storage and per-student user
+accounts are left as future work.
 
 
 CHAPTER 2: ARCHITECTURAL DESIGN AND SYSTEM FLOW
@@ -71,60 +79,69 @@ CHAPTER 2: ARCHITECTURAL DESIGN AND SYSTEM FLOW
 2.1 Architectural Overview
 
 CircularSync follows a producer and consumer architecture. A watcher observes
-the incoming directory and produces work items; a work queue buffers them; a
-worker pool converts each file into a notice object; and a registry stores,
-indexes and queries notices. Two supporting components complete the design: an
-audit logger that records events without blocking the threads producing them,
-and a command console that translates user commands into registry queries.
+the incoming directory and produces work items; a bounded work queue buffers
+them; a worker pool converts each file into a notice object; and a registry
+stores, indexes and queries notices. Inside each worker, a three-stage
+ingestion pipeline acquires text from the file, structures it if it is
+free-form, and validates it into a typed notice. Around this core sit an audit
+logger that records events without blocking the threads producing them, a
+command console for terminal queries, and a web portal that accepts uploads
+and serves the live board to browsers.
 
 The components are deliberately decoupled. The watcher knows nothing about
-parsing, the workers know nothing about the console, and the registry knows
-nothing about files. Each communicates through a narrow interface: a path on a
-queue, a notice passed to a register method, or a line passed to the logger.
-This allows each part to be tested in isolation and keeps the concurrency model
-simple.
+parsing, the workers know nothing about the portal, and the registry knows
+nothing about files. The portal never writes to the registry directly:
+uploaded files are delivered into the watched directory and travel through
+exactly the same WatchService, queue and worker pool as a file copied in by
+hand. This single path keeps behaviour identical however a circular arrives.
 
 2.2 Life Cycle of a Notice
 
-An issuing office saves a file such as sample_exam.txt into incoming_notices.
-The operating system reports a creation event, usually followed by
-modification events. The watcher thread wakes, resolves the file name against
-the watched directory, checks the extension, offers the path to the work queue
-and returns to waiting.
+An administrator uploads a file such as a placement circular in Word format, or
+an office copies it into the incoming directory. The portal writes uploads to a
+hidden temporary file and renames it atomically, so the directory only ever
+contains complete files. The operating system reports a creation event, the
+watcher thread resolves the file name, checks the extension, offers the path to
+the work queue and returns to waiting.
 
 A worker thread takes the path and waits until the file has stopped changing,
 reading its size and modification time until two consecutive readings agree.
-If this fingerprint equals the one recorded for the last processing of the same
-path, the event is a duplicate and is discarded. Otherwise the parser reads the
-content, detects the type from the TYPE header, constructs the matching
-subclass and runs validation, metadata parsing and the deadline check. The
-registry reports whether the notice was added, replaced an earlier version of
-the same file, or duplicated existing content. The worker writes an audit
-record and notifies listeners, which in daemon mode print the new notice.
+If this fingerprint equals the one recorded for the previous processing of the
+same path, the event is a duplicate and is discarded. Otherwise the parser
+service acquires the text: plain-text files are read directly, while PDF and
+Word files are passed to the document extractor. If the text is not already in
+the structured header format, the circular structurer infers the headers from
+the prose. The parser then constructs the matching subclass and runs
+validation, metadata parsing and the deadline check. The registry reports
+whether the notice was added, replaced an earlier version of the same file, or
+duplicated existing content. The worker writes an audit record and publishes a
+processing event, which the portal's file tracker uses to update the status of
+that file in the browser.
 
-A deleted file causes its notice to be withdrawn. An edited file replaces its
-old version atomically. A file that fails validation is audited, and any
-earlier valid version of it is withdrawn so that stale information is not
-shown.
+A deleted file causes its notice to be withdrawn, an edited file replaces its
+old version atomically, and a file that fails validation is audited with the
+reason while any earlier valid version of it is withdrawn.
 
 2.3 Operating Modes
 
-Scan mode queues every existing file, waits for the pipeline to drain, prints
-the ranked board and exits. Query mode does the same but runs a single query,
-which suits scripting. Daemon mode keeps the watcher running and offers an
-interactive prompt while new files continue to arrive; it can also run
-unattended for a fixed duration. All modes share one pipeline, so behaviour
-verified in one holds in the others.
+Scan mode processes every existing file once, prints the ranked board and
+exits. Query mode does the same but runs a single query, which suits scripts.
+Daemon mode keeps the watcher running with an interactive terminal prompt. Web
+mode adds the portal, either for the local computer only or, with the public
+option, for access from the internet. All modes share one pipeline, so
+behaviour verified in one holds in the others.
 
 2.4 Design Decisions
 
 The registry is kept in memory because active circulars number in the
 hundreds; the source files remain the authoritative record, so the registry can
 always be rebuilt by rescanning. The file system is the integration point
-because every office can drop a file into a shared folder. Finally, the
-priority score is computed once at parse time and cached. It depends on the
-reference date, and recomputing it during comparisons could leave the sorted
-collection internally inconsistent as the date changed.
+because every office can drop a file into a shared folder. The priority score
+is computed once at parse time and cached, because recomputing it during
+comparisons could leave the sorted collection inconsistent as the date
+changes. Finally, free-form circulars are converted into the same structured
+header format that hand-written notices use, so the strict validator remains
+the single gatekeeper for every notice.
 
 
 CHAPTER 3: OBJECT-ORIENTED DESIGN PATTERNS
@@ -136,7 +153,7 @@ shape; parseMetadata, which converts header values into typed fields; and
 isProcessed, which reports completion. Both of the first two declare the
 checked InvalidNoticeFormatException, forcing every implementation to report
 problems uniformly. Separating validation from parsing lets cheap structural
-checks reject most bad input before any conversion, and lets error messages
+checks reject bad input before any conversion, and lets error messages
 distinguish a wrongly shaped file from one with wrong values.
 
 3.2 The Abstract Base Class Notice
@@ -144,382 +161,380 @@ distinguish a wrongly shaped file from one with wrong values.
 The abstract class Notice implements Processable and Comparable. It holds the
 state shared by every circular: source file name, raw content, reference date,
 headers, body, identifier, title, issuer, issue date, deadline, priority
-keywords and cached score.
+keywords and cached score. It provides final implementations of validateFormat
+and parseMetadata, so subclasses cannot weaken the common checks, and applies
+the Template Method pattern: common logic runs first, then calls the protected
+hooks getTypeSpecificRequiredHeaders and parseTypeSpecificMetadata. Two public
+abstract methods, calculatePriorityScore and formatSummary, express behaviour
+that differs between categories, and getCategory ties each subclass to a
+constant of the NoticeCategory enumeration.
 
-Notice provides final implementations of validateFormat and parseMetadata, so
-subclasses cannot weaken the common checks. Within them it applies the
-Template Method pattern: common logic runs first, then calls the protected
-abstract hooks getTypeSpecificRequiredHeaders and parseTypeSpecificMetadata.
-The base class controls the order of operations while subclasses supply only
-what differs. Two public abstract methods, calculatePriorityScore and
-formatSummary, express behaviour that differs entirely between categories, and
-getCategory ties each subclass to a constant of the NoticeCategory enumeration.
-
-The base class also offers helpers for scoring. The method urgencyPoints
-implements a stepped curve awarding forty points when the deadline is at most
-one day away, thirty-two within three days, twenty-four within a week, fourteen
-within two weeks, six within a month and two otherwise. The method
-keywordPoints sums the weights of the notice's keywords from a table supplied by
-the subclass. Stepped values were chosen because they are easy to explain to
-students and administrators.
+The base class offers two scoring helpers. The method urgencyPoints implements
+a stepped curve awarding forty points when the deadline is at most one day
+away, thirty-two within three days, twenty-four within a week, fourteen within
+two weeks, six within a month and two otherwise. The method keywordPoints sums
+the weights of the notice's keywords from a table supplied by the subclass.
+Stepped values were chosen because they are easy to explain to students.
 
 3.3 Inheritance and Method Overriding
 
-ExamNotice adds a course code, examination date, venue and optional
-examination type. Its score combines a category base of thirty, the urgency of
-the action deadline, a proximity bonus for the examination date, and weights
-for keywords such as mandatory, hall-ticket and end-semester. The sample
-examination notice, six days from its deadline and twelve from its
-examination, scored thirty plus twenty-four plus six plus twenty-six, giving
-eighty-six.
+ExamNotice adds a course code, examination date, venue and examination type.
+Its score combines a base of thirty, the urgency of the action deadline, a
+proximity bonus for the examination date, and weights for keywords such as
+mandatory and hall-ticket; the sample end-semester notice scored eighty-six.
+PlacementNotice adds company, role, eligibility, package, minimum grade point
+average and drive date, with a base of twenty-five and a compensation band
+bonus; the sample drive scored seventy-seven. ClubNotice adds club name, event
+date, venue and seat limit, with a base of only ten and three quarters of the
+urgency points, so optional activities never bury mandatory ones; the sample
+workshop scored twenty-nine. GeneralNotice, added for fee, scholarship, hostel
+and holiday circulars, requires no extra headers and scores a base of fifteen
+plus urgency and keywords such as fee and scholarship.
 
-PlacementNotice adds company, role, eligibility and optional package, minimum
-grade point average and drive date. Its base is twenty-five, plus urgency, a
-compensation band bonus of five, ten or fifteen points, and keyword weights for
-terms such as dream and registration. The sample placement notice scored
-seventy-seven.
-
-ClubNotice adds club name, event date, venue and an optional seat limit. Its
-base is only ten so that optional activities never bury mandatory ones, and it
-receives three quarters of the urgency points, keyword weights for terms such
-as hackathon and workshop, and a scarcity bonus of four points when seats are
-limited to sixty or fewer. The sample club notice scored twenty-nine.
-
-Each subclass overrides formatSummary to present the fields relevant to its
-category. The console and the board snapshot call formatSummary through a
-reference of the base type, and dynamic dispatch selects the right version at
-run time. Code that renders the board therefore needs no knowledge of which
-notice types exist.
+Each subclass overrides formatSummary to present its own fields. The console,
+the board snapshot and the portal call these methods through a reference of
+the base type, and dynamic dispatch selects the right version at run time.
+Adding the fourth category required a new subclass, an enumeration constant
+and one line in the factory, and no change to the pipeline, registry or
+ranking code, which demonstrates the value of the hierarchy.
 
 3.4 Natural Ordering and Identity
 
 The natural order places the highest score first, then the earliest deadline,
-then title, then identifier. The final comparison makes the order total, which
-a TreeSet requires to retain distinct notices. The identifier combines a
-three-letter category prefix with the first ten hexadecimal characters of a
-SHA-256 digest of the content, so identical files share an identifier and
-duplicates are detected cheaply. The equals and hashCode methods use the
-identifier, keeping them consistent with the ordering.
+then title, then identifier, making the order total as a TreeSet requires. The
+identifier combines a category prefix with the first ten hexadecimal characters
+of a SHA-256 digest of the content, so identical files share an identifier and
+duplicates are detected cheaply.
 
 3.5 Supporting Patterns
 
-The parser's protected createNotice method is a Factory Method mapping a
-category to its subclass, overridable to add categories. The daemon's index
-listeners implement the Observer pattern, and the console applies a simple
-Command pattern, dispatching on the first word of each command line.
+The parser's createNotice method is a Factory Method mapping a category to its
+subclass. The daemon publishes processing events to registered listeners, an
+application of the Observer pattern that lets the console and the web portal
+react to the same pipeline without the daemon knowing either exists. The
+document extractor and circular structurer act as a Pipeline of stateless
+stages in front of the validator, and the console applies a simple Command
+pattern.
 
 
 CHAPTER 4: MULTITHREADING AND CONCURRENCY CONTROL
 
 4.1 Thread Model
 
-The main thread parses options, starts the components and reads commands in
-daemon mode. A single watcher thread blocks on the WatchService. A fixed worker
-pool, four threads by default, parses and registers notices. A single audit
-writer thread drains log records to disk. A shutdown hook flushes the log and
-writes the final board when the user interrupts the program.
+The main thread starts the components and reads terminal commands. A single
+watcher thread blocks on the WatchService. A fixed worker pool, four threads by
+default, extracts, parses and registers notices. A single audit writer thread
+drains log records to disk. The web portal runs its own fixed pool of eight
+request threads. A shutdown hook flushes the log and writes the final board
+when the program is interrupted or the hosting platform stops it.
 
 4.2 The ExecutorService and the BlockingQueue
 
-The pool is created with Executors.newFixedThreadPool and a thread factory that
-names each thread, for example circularsync-worker-1, and installs an
-uncaught-exception handler, which makes the audit log readable. Rather than
-submitting one task per file, the daemon submits one long-lived consumer loop
-per thread, connected to the watcher through a LinkedBlockingQueue bounded at
-1,024 paths. Each worker blocks on take until a path is available. The bound
-provides back-pressure: if files arrive faster than they can be parsed, the
-watcher waits up to five seconds and then logs a saturation event instead of
-letting memory grow without limit.
-
-Shutdown uses the poison-pill technique. The daemon closes the WatchService,
-then places one sentinel path per worker on the queue. Because the sentinels
-sit behind any remaining work, every queued file is still processed before the
-workers exit. The sentinel is compared by identity, so a real file of the same
-name cannot be mistaken for it.
+The worker pool is created with Executors.newFixedThreadPool and a thread
+factory that names each thread, which makes the audit log readable. The daemon
+submits one long-lived consumer loop per thread, connected to the watcher
+through a LinkedBlockingQueue bounded at 1,024 paths. The bound provides
+back-pressure: if files arrive faster than they can be processed, the watcher
+waits and then logs a saturation event rather than letting memory grow without
+limit. This matters more now that PDF extraction can take tens of milliseconds
+per file. Shutdown uses the poison-pill technique: one sentinel path per worker
+is queued behind any remaining work, so every queued file is still processed
+before the workers exit.
 
 4.3 Race Conditions and Their Prevention
 
-Duplicate events are the first race. Most operating systems report a creation
-followed by several modifications for one save. A concurrent set of queued
-paths ensures that a path is waiting in the queue at most once, and the
-recorded fingerprint discards later events for content already handled. In the
-live run the daemon observed six events and suppressed two this way.
+Duplicate events are the first race: most operating systems report a creation
+followed by several modifications for one save. A concurrent set ensures a path
+waits in the queue at most once, and the recorded fingerprint discards later
+events for content already handled. Concurrent processing of one file is the
+second: an edit made while a worker is parsing re-enqueues the path, so a
+per-path ReentrantLock makes a second worker wait and then process the newer
+content. Partially written files are the third: the worker polls size and
+modification time until they are stable, and portal uploads avoid the problem
+entirely through atomic renames.
 
-Concurrent processing of one file is the second. An edit made while a worker
-is parsing re-enqueues the path, and a second worker may take it; if both
-registered concurrently, the older version could win. A per-path ReentrantLock,
-held in a ConcurrentHashMap, makes the second worker wait, after which it sees
-the newer fingerprint and processes the new content.
-
-Partially written files are the third. A creation event can arrive before a
-copy finishes, so the worker polls size and modification time every 120
-milliseconds until they are stable.
+A fourth race appeared in the web portal. A browser poll that started just
+before an administrator signed in could return after the sign-in and briefly
+reset the page to the viewer state. The page now records which credential each
+poll used and discards responses issued under a different one.
 
 4.4 Thread-Safe Collections in the Registry
 
 The primary store is a ConcurrentHashMap from identifier to notice, giving
 lock-free lookups. A second ConcurrentHashMap maps source file names to
 identifiers, enabling replacement on edit and withdrawal on deletion. Category
-and keyword indexes are ConcurrentHashMaps whose values are concurrent sets
-from ConcurrentHashMap.newKeySet.
-
-The ranked board is a TreeSet. Because TreeSet is not thread-safe and each
-registration must update five structures atomically, every mutation holds the
-write lock of a ReentrantReadWriteLock and every ranked view holds the read
-lock, so many readers proceed in parallel while writers have exclusive access.
-Searches and point lookups read only the concurrent maps and need no lock.
-
-Deadline queries use a PriorityQueue as a min-heap ordered by deadline and then
-score, so the soonest deadline is listed first regardless of priority. This
-complements the TreeSet, which orders by priority.
+and keyword indexes are ConcurrentHashMaps whose values are concurrent sets.
+The ranked board is a TreeSet; because each registration must update five
+structures atomically, every mutation holds the write lock of a
+ReentrantReadWriteLock and every ranked view holds the read lock, so many
+portal requests can read in parallel. Deadline queries use a PriorityQueue as a
+min-heap ordered by deadline. The portal's file tracker and the rate limiter
+also hold shared state; the tracker synchronises its small collections, and
+the limiter keeps per-client counters in a ConcurrentHashMap.
 
 4.5 Visibility and Draining
 
 Every field of a notice is written by one worker, and the final write sets a
-volatile processed flag. The Java Memory Model makes all earlier writes visible
-to any thread that reads the flag, and publication through the registry's lock
-and concurrent maps also establishes happens-before ordering. Published notices
-are never modified. Statistics use AtomicLong counters.
-
-Scan mode and the tests must know when all work has finished. The daemon keeps
-an in-flight counter guarded by a monitor, incremented on enqueue and
-decremented in a finally block when a worker finishes. The method awaitIdle
-waits on the monitor until the count reaches zero. The finally block ensures a
-failure in one file can never leave the counter raised.
+volatile processed flag, so the Java Memory Model makes all earlier writes
+visible to any thread that reads it; published notices are never modified.
+Statistics use AtomicLong counters. An in-flight counter guarded by a monitor,
+decremented in a finally block, lets scan mode and the tests wait until all
+work has finished.
 
 
-CHAPTER 5: JAVA NIO AND FILE MANAGEMENT ENGINE
+CHAPTER 5: JAVA NIO, FILE MANAGEMENT AND DOCUMENT EXTRACTION
 
 5.1 The WatchService Event Loop
 
-The daemon registers the incoming directory with a WatchService for creation,
-modification and deletion events. The watcher calls take, which blocks without
-consuming processor time, then drains events with pollEvents. An overflow event,
-meaning the operating system discarded events, triggers a warning and a full
-rescan so no file is permanently missed. Deletions withdraw notices, and
-creations or modifications of supported files enqueue the path. The key is then
-reset; if it is no longer valid, the daemon logs an error and the loop ends.
-Closing the WatchService makes a blocked take throw
-ClosedWatchServiceException, which the loop catches to exit cleanly without
-polling.
+The daemon registers the incoming directory for creation, modification and
+deletion events. The watcher calls take, which blocks without consuming
+processor time, then drains events with pollEvents. An overflow event triggers
+a full rescan so no file is missed; deletions withdraw notices; creations and
+modifications of supported files enqueue the path. Closing the WatchService
+makes a blocked take throw ClosedWatchServiceException, which ends the loop
+cleanly without polling.
 
 5.2 Path and Files API Usage
 
-Paths are normalised to absolute form before use as map keys. The initial scan
-uses Files.newDirectoryStream in try-with-resources. Files.readAttributes with
-BasicFileAttributes returns size and modification time in one call. Files.size
-rejects oversized files before they are loaded. Content is read with
-Files.newBufferedReader and an explicit UTF-8 charset, and a leading byte-order
-mark written by some Windows editors is removed. Log directories are created
-with Files.createDirectories.
+Paths are normalised to absolute form before use as map keys. Directory scans
+use Files.newDirectoryStream in try-with-resources, attributes are read with
+Files.readAttributes, and oversized files are rejected with Files.size before
+they are loaded. Plain text is read with Files.newBufferedReader and an
+explicit UTF-8 charset. Portal uploads are written with Files.createTempFile
+and Files.write and then moved into place with Files.move using ATOMIC_MOVE and
+REPLACE_EXISTING.
 
-5.3 Asynchronous Audit Logging
+5.3 Document Text Extraction
 
-If workers wrote directly to disk, a slow disk would slow parsing. The
-AuditLogger separates producing a record from writing it. A call to log formats
-a line with timestamp, severity, thread name, event code and detail, offers it
-to a bounded LinkedBlockingQueue, and returns at once; if the queue stays full
-for fifty milliseconds the record is counted as dropped rather than stalling
-the caller. A dedicated writer thread opens the file once with
-Files.newBufferedWriter using CREATE, APPEND and WRITE, inside a
-try-with-resources block spanning the logger's life. It takes a record, drains
-any others waiting, writes them as a batch and flushes once. Because only one
-thread writes, lines never interleave. Closing the logger enqueues a sentinel
-and waits for the writer, guaranteeing every accepted record reaches disk.
+PDF text is extracted with Apache PDFBox 3.0.3, reading at most forty pages and
+sorting text by position so letterheads read in order. A PDF with no
+selectable text, which is usually a scanned image, is rejected with that
+explanation, and a password-protected PDF is reported as such. Word documents
+are handled with the JDK alone: the .docx file is opened as a ZIP archive, the
+part word/document.xml is read, and its XML is streamed through StAX, emitting
+paragraph, line and tab breaks. Because uploads may come from the internet,
+DTD processing and external entities are disabled to prevent XML external
+entity attacks, and the decompressed XML is capped at twenty megabytes to
+defeat ZIP bombs. Extracted text is capped at 200,000 characters.
 
-5.4 Atomic Snapshots and Format Flexibility
+The PDFBox jars are not stored in the repository. A small build tool downloads
+them from Maven Central and verifies each against a pinned SHA-256 checksum, so
+a tampered or corrupted dependency fails the build.
 
-The ranked board is written to processed_notices.txt after each scan and when
-the daemon stops. It is first written to a temporary file and then moved over
-the target with Files.move using ATOMIC_MOVE and REPLACE_EXISTING, so readers
-never see a half-written board. If atomic moves are unsupported, an ordinary
-replacing move is used.
+5.4 Inferring Structure from Free-Form Circulars
 
-The parser accepts plain text and Markdown. Markdown headers may be written as
-list items with bold keys; the normaliser strips these markers before matching.
-Lines beginning with a hash, comments in plain text and headings in Markdown,
-are ignored in the header block, so one file reads well in a Markdown viewer and
-still parses correctly.
+Real circulars are letters, not forms. The CircularStructurer reads them with
+transparent heuristics. The category is chosen from weighted vocabulary: terms
+such as examination, hall ticket and revaluation suggest an examination notice;
+recruitment, campus drive and LPA a placement notice; club, workshop and
+hackathon a club notice; and anything below a confidence threshold becomes a
+general notice. The title is taken from a "Subject:" line, otherwise the first
+substantive line that is not a letterhead or reference. Dates are recognised in
+ISO form, day-first numeric form such as 15/11/2026 or 15.11.26, and written
+form such as 15th November 2026. The issue date comes from a "Date:" line, and
+the deadline from the date nearest a cue such as "last date", "on or before",
+"register by" or "closes on". The issuer is taken from the signature block.
+Type-specific fields such as course codes, venues, company names, packages,
+eligibility, club names and seat limits come from labelled lines and common
+patterns, with safe defaults when absent.
+
+The structurer writes its findings as an ordinary header block and records two
+extra headers: the original format, and the list of fields it had to infer. The
+original text becomes the notice body unchanged. A file that begins like a
+structured notice is never inferred; it is validated strictly, so a mistake in
+a hand-written notice is reported rather than silently guessed.
+
+5.5 Asynchronous Audit Logging
+
+The AuditLogger separates producing a record from writing it. A call to log
+formats a line and offers it to a bounded queue, returning at once. A dedicated
+writer thread holds the file open with Files.newBufferedWriter in
+try-with-resources, writes queued records in batches and flushes once per
+batch, so lines never interleave. The ranked board is written to a snapshot
+file through a temporary file and an atomic move, so readers never see a
+half-written board.
 
 
-CHAPTER 6: EXCEPTION HANDLING AND SYSTEM RESILIENCE
+CHAPTER 6: EXCEPTION HANDLING, RESILIENCE AND SECURITY
 
 6.1 Custom Exception Hierarchy
 
-The root exception, CircularSyncException, extends Exception and carries the
-source file name. InvalidNoticeFormatException is thrown when a file cannot be
-interpreted. It records an optional line number and builds a consistent message
-naming the file, the line and the problem, such as a missing or duplicate
-header, an empty value, an unparseable date or an unknown type. In the live
-run, a deliberately broken file was rejected with a message listing its six
-missing headers, telling the issuing office exactly what to correct.
-ExpiredDeadlineException is thrown when a valid notice's deadline precedes the
-processing date, and carries both dates. Expired notices are logged rather than
-displayed, since an action that can no longer be taken only adds noise.
-
-These exceptions are checked so that the compiler forces callers to handle
-parsing failures. Programming errors, such as calling parseMetadata before
-validateFormat, raise unchecked IllegalStateException instead, because they
-indicate a defect in code rather than in input.
+The root exception, CircularSyncException, carries the source file name.
+InvalidNoticeFormatException is thrown when a file cannot be interpreted and
+builds a consistent message naming the file, the line where relevant and the
+problem. The same exception now covers extraction failures, such as a scanned
+PDF, a password-protected PDF or a damaged Word document. ExpiredDeadlineException
+is thrown when a valid notice's deadline precedes the processing date and
+carries both dates. Both are checked, so the compiler forces callers to handle
+them, while programming errors raise unchecked IllegalStateException.
 
 6.2 Input Validation Pipeline
 
-Validation proceeds in layers of increasing cost. The parser checks the
-extension and ignores hidden and swap files; rejects empty files and files over
-256 kilobytes; reads UTF-8 and converts malformed encoding into a format
-exception; and detects the type before constructing any object. The notice then
-checks for a terminator line, the KEY colon value shape, duplicate keys, empty
-values, all required headers, agreement between declared type and subclass,
-and a non-empty body. Parsing rejects a deadline or examination date before the
-issue date, a grade point requirement above ten, a negative seat count and an
-empty keyword list. Only then does the deadline check run.
+Validation proceeds in layers of increasing cost: extension and hidden-file
+checks; size limits of 256 kilobytes for text and fifteen megabytes for PDF and
+Word files; text extraction with its own limits; structuring; and finally the
+strict header validation and metadata parsing, which reject impossible dates,
+deadlines before the issue date, out-of-range values and empty keyword lists.
+The portal adds a further check before a file reaches the folder: the first
+bytes must match the claimed type, so a renamed executable is refused as not a
+real PDF.
 
 6.3 Resource Safety and Recovery
 
-Every stream, reader, writer and directory handle is opened in a
-try-with-resources statement, as are the audit logger and daemon in scan mode,
-both of which implement AutoCloseable. This matters particularly on Windows,
-where an open handle prevents a file from being replaced or deleted.
+Every stream, reader, writer, ZIP file, PDF document and directory handle is
+opened in a try-with-resources statement. The worker loop handles each failure
+separately: rejections are counted, logged and shown in the portal with their
+reason; a file deleted before it could be read is treated as normal; other
+input and output errors are logged and retried on the next event; and an
+unexpected runtime exception is caught at loop level so one bad file can never
+shrink the worker pool.
 
-The worker loop handles each failure separately. A format or expiry rejection
-is counted, logged and causes any earlier version of the file to be withdrawn.
-A NoSuchFileException, caused by deletion between event and read, is treated
-as normal. Any other IOException, such as a sharing violation, is logged and
-the fingerprint cleared so the next event retries the file. A RuntimeException
-from an unexpected defect is caught and logged at loop level, so one bad file
-can never kill a worker and silently shrink the pool. InterruptedException is
-never swallowed; the interrupt status is restored. The Main class maps failures
-to exit codes: two for incorrect usage, one for input and output failure, and
-130 for interruption.
+6.4 Security for Public Deployment
+
+Publishing the portal on the internet required protecting it. Anyone may view
+the board, but uploads, deletions and demo drops require an administrator
+password. The password is chosen by the administrator, either as an environment
+variable or a command-line option; if the portal is made public without one, a
+random password is generated and printed so the portal is never left open. The
+browser sends the password in a request header, percent-encoded so that
+spaces, symbols and non-English letters survive, and the server compares it in
+constant time. A client that sends ten wrong passwords within ten minutes is
+locked out, and writes are limited to sixty per client per ten minutes. Behind
+a proxy or tunnel the real client address is read from forwarding headers.
+File names are whitelisted against path traversal, and every response carries
+defensive headers, including a content security policy, a frame denial and a
+no-sniff directive; original documents are served under a sandbox policy.
 
 
 CHAPTER 7: MODULE DESCRIPTION AND CODE ANATOMY
 
 7.1 Package Structure
 
-The source tree under src/com/circularsync contains six packages: model for
-the notice hierarchy and category enumeration, interfaces for Processable,
-exceptions for the three exception classes, service for the parser, registry
-and audit logger, daemon for the directory watcher, and main for the entry
-point and query console. Tests live in a separate test tree.
+The source tree under src/com/circularsync contains twenty-five classes in
+seven packages. The model package holds the notice hierarchy and category
+enumeration; interfaces holds Processable; exceptions holds the three
+exception classes; service holds the parser, document extractor, circular
+structurer, registry and audit logger; daemon holds the directory watcher and
+its processing event and listener types; web holds the portal server, its
+settings, the file activity tracker, the rate limiter and a small JSON writer;
+and main holds the entry point and query console. The test suite lives in a
+separate tree, build tools in tools, and the portal page in web/index.html.
 
-7.2 The model Package
+7.2 The service Package
 
-NoticeCategory defines EXAM, PLACEMENT and CLUB, each with an identifier prefix,
-a display name and a case-insensitive lookup. The validateFormat method of
-Notice normalises line endings, walks the lines until the terminator, matches
-each against a regular expression requiring an upper-case key, a colon and a
-value, and collects headers into an insertion-ordered map. Each subclass
-declares immutable sets of required headers, immutable keyword-weight maps and
-a category base score.
+NoticeParserService holds only a supplier of the reference date, injected so
+that tests can fix the date. It chooses the size limit by type, acquires text
+through the extractor for PDF and Word files, sends free-form text through the
+structurer, and then performs the factory and validation steps.
+DocumentTextExtractor and CircularStructurer are stateless and shared by all
+workers. NoticeRegistry provides registration, removal, lookup by identifier or
+prefix, ranked and top views, category and keyword search with AND semantics,
+deadline queries and statistics.
 
-7.3 The service Package
-
-NoticeParserService holds only a supplier of the reference date, injected
-through its constructor. Production code supplies the system date, while tests
-and the today option supply a fixed date, making every score in this report
-reproducible. With no mutable state, one instance is shared by all workers.
-
-NoticeRegistry provides register, removeBySource, find, ranked, top,
-byCategory, search, dueWithin, countsByCategory and size. Search tokenises the
-query by lower-casing it and splitting on characters other than letters,
-digits and hyphens, discards stop words and very short tokens, then intersects
-the identifier sets of each term, giving AND semantics. The index covers the
-title, keywords, body and every non-date header value. The find operation
-accepts a full identifier or a unique prefix, so typing EXM suffices when only
-one examination notice is active.
-
-7.4 The daemon and main Packages
+7.3 The daemon Package
 
 DirectoryWatcherDaemon owns the queue, the queued-path set, per-path locks,
-fingerprints, listeners and statistics. Its public methods start, startWorkers,
+fingerprints, statistics and listeners. Its public methods start, startWorkers,
 startWatching, enqueueExistingFiles, awaitIdle and close define the lifecycle.
-Nested classes hold the atomic statistics, the file fingerprint and the named
-thread factory.
+ProcessingEvent is an immutable record of one outcome, such as indexed,
+rejected for format, rejected as expired or removed, and ProcessingListener is
+the callback interface through which the portal observes outcomes.
 
-Main parses options with a small parser that validates numeric ranges and
-dates, wires the components for each mode, registers the shutdown hook and
-writes the board snapshot. QueryConsole interprets list, top, category, search,
-due, show, stats, help and quit. Its renderBoard method is shared with the
-snapshot writer, so the file on disk always matches the console.
+7.4 The web Package
 
-7.5 Build Scripts
+WebPortalServer is built on com.sun.net.httpserver.HttpServer. It serves the
+single-page portal and a JSON interface: a state endpoint returning statistics,
+tracked files, the filtered board and recent activity; endpoints for one
+notice, the original file, uploads, deletions and demo drops; and a health
+endpoint for hosting platforms. FileActivityTracker records every file and its
+latest outcome, whether uploaded or copied into the folder, together with an
+activity feed. PortalSettings carries the host, port, password and proxy
+configuration, and RateLimiter implements fixed-window counters.
 
-The scripts build.sh and build.bat compile all sources with release 17, all
-lint warnings and UTF-8 encoding into the out directory, then run the test
-suite. They honour JAVA_HOME, which allowed the project to be built with the
-JDK bundled with Android Studio on a machine with no JDK on the system path.
+The portal page is a single HTML file with no framework. It polls the state
+endpoint every 1.2 seconds and re-renders only the sections that changed. The
+Uploads tab provides a drag-and-drop area, one-click demo files and a table of
+tracked files with live status, results and reasons. The Notice Board tab
+shows ranked cards with score rings, category colours, deadline pills, format
+chips and auto-detected markers, with search, category and deadline filters, a
+detail panel that lists inferred fields and links to the original document, and
+a live activity feed. It adapts to light and dark themes and to phone screens.
+
+7.5 The main Package and Deployment Files
+
+Main parses options, wires the components for each mode, resolves the
+administrator password and registers the shutdown hook. QueryConsole
+interprets terminal queries. A Dockerfile builds the application from source in
+a JDK image, verifies the dependencies, and runs it as a non-root user in a JRE
+image, honouring the platform's port variable. A Render blueprint describes a
+free web service that asks the administrator for the password at creation.
 
 
 CHAPTER 8: VERIFICATION, TESTING AND GIT MANAGEMENT
 
 8.1 Test Methodology
 
-The automated suite, CircularSyncTestSuite, uses no external framework. A small
-harness records each test's outcome and the exit code equals the number of
-failures, so the suite can gate a build. Every test fixes the reference date at
-4 November 2026, so expected scores are exact.
+The automated suite uses no test framework; a small harness records outcomes
+and the exit code equals the number of failures. Every test fixes the
+reference date at 4 November 2026, so expected scores are exact. The
+twenty-six tests fall into six groups. Parsing tests confirm the correct
+subclass, fields and score for each structured category and for decorated
+Markdown. Rejection tests cover missing headers, bad dates, unterminated
+headers, unknown types, empty bodies, inverted dates and expired deadlines.
+Registry tests cover ranking, duplicates, replacement of edited files, search
+and deadline ordering, and a concurrency test releases eight threads at once to
+register four hundred notices while reading the board, then checks that the
+board is complete and strictly ordered.
 
-The eighteen tests fall into four groups. Parsing tests confirm that a valid
-notice of each category yields the right subclass, fields and exact score, and
-that decorated Markdown parses. Rejection tests confirm that a missing header,
-bad date, unterminated header, unknown type, empty body and deadline before
-issue date each raise InvalidNoticeFormatException with an informative message,
-and that a past deadline raises ExpiredDeadlineException. Registry tests cover
-ranking, duplicate detection, replacement of an edited file with removal of its
-old index terms, AND-semantics search and deadline ordering.
-
-The concurrency test releases eight threads simultaneously through a countdown
-latch; each registers fifty notices while repeatedly reading the board and
-searching. It confirms that all 400 registrations succeed, the board holds
-exactly 400 strictly ordered notices, and the index returns all 400 for a
-common term. Two daemon tests use real temporary directories and the real
-WatchService. The first runs a mix of valid, malformed, expired and unsupported
-files through three workers and checks every count and every audit outcome.
-The second writes files into a running daemon, deletes one and rewrites
-another, waiting each time for the registry to reflect the change.
+Document tests generate real files during the run: a free-form examination
+letter, a Word placement circular built as a genuine .docx archive, and a PDF
+club circular produced with PDFBox. Each must be classified correctly with the
+right title, deadline, secondary date and type-specific fields. Further tests
+confirm the fallback to the general category, the rejection of a PDF without
+text and of a corrupt Word file. Daemon tests use real directories and the real
+WatchService for creation, modification and deletion. Portal tests run the
+HTTP server: uploads, demo drops, filtering, deletion, refusal of path
+traversal, unsupported types and fake PDFs, and, with a password containing
+spaces, a plus sign and an accented letter, refusal without the password,
+acceptance with it, and lockout after repeated wrong attempts.
 
 8.2 Results
 
-The project compiled sixteen source files with no errors or lint warnings, and
-all eighteen tests passed.
+Twenty-six source files compiled with no errors or lint warnings, and all
+twenty-six tests passed. With the reference date fixed, the structured samples
+ranked the examination notice first at 86, the placement drive at 77 and the
+club workshop at 29, and an urgent re-examination dropped in during a live run
+rose to the top at 100. Two free-form demonstration documents written like real
+college letters were processed through the portal: a Word placement circular
+was classified as a placement notice with its company, role, package of 12
+LPA, deadline of 10 November and drive date of 17 November all detected,
+scoring 85; a PDF scholarship circular was classified as a general notice with
+its deadline read from "on or before 18th November 2026" and its issuer from
+the signature, scoring 55. A malformed notice and an expired notice were
+rejected with their reasons shown in the portal.
 
-Three sample circulars were placed in incoming_notices: an end-semester
-examination for CS301 Operating Systems with a hall-ticket deadline of 10
-November 2026, a recruitment drive with registration closing on 8 November and
-a package of 18.5 lakhs per annum, and a robotics workshop with forty seats
-closing on 25 November. Scan mode indexed all three with no rejections or
-input and output errors and exited with code zero, ranking the examination
-first at 86, the placement second at 77 and the club third at 29. The due
-query for seven days listed the placement before the examination because its
-deadline is earlier, confirming that the deadline heap orders independently of
-score. The show query printed the full examination notice given only the
-prefix EXM.
-
-The daemon was then run unattended for seven seconds with three workers. Two
-seconds in, a Markdown hackathon circular and a broken examination circular
-were dropped into the directory, and both were deleted two seconds later. The
-audit log shows the three samples indexed concurrently by three worker threads
-within a quarter second, the hackathon indexed with a score of 48 reflecting
-its two-day deadline, the broken file rejected with its six missing headers
-listed, and the hackathon withdrawn by the watcher when deleted. The final
-statistics were seven files queued, four indexed, one rejected for format, one
-removed, six events observed, two duplicate events suppressed and zero input
-or output errors. The interactive shell, driven with top, search, category, an
-unknown command and quit, produced the expected output for each and exited
-with code zero.
+The portal was tested in a browser for both access levels, for light and dark
+themes and at phone width, without console errors. It was then published
+through a Cloudflare quick tunnel and opened from its public address, where the
+board loaded for an anonymous visitor and an anonymous upload attempt was
+refused. Testing the sign-in through the public address exposed two usability
+faults: a password copied from the terminal could carry its label or a line
+break, and a background poll could briefly undo a fresh sign-in. Both were
+corrected and re-verified. Docker was not available on the development
+machine, so the container image is built by the hosting platform rather than
+locally.
 
 8.3 Git Management
 
-The workspace was initialised as a Git repository on the branch main. A
-gitignore file excludes class files, the out directory, jar and temporary
-files, editor configuration and generated audit logs, while a placeholder keeps
-the audit_logs directory in the repository. All source, tests, sample notices,
-build scripts and the readme were committed with the message "feat: initial
-implementation of CircularSync notice daemon, thread pool parser, and NIO watch
-service", after which git status reported a clean working tree. This report was
-added in a separate documentation commit, keeping implementation and
-documentation distinct in the history.
+The project is maintained in a Git repository on the main branch and published
+on GitHub. A gitignore file excludes compiled classes, the out and lib
+directories and generated audit logs. The history records the project's
+evolution as separate, descriptive commits: the initial implementation of the
+daemon, thread pool parser and NIO watch service; the academic report and its
+condensed version; the live demonstration guide; the web portal with live
+upload tracking; PDF and Word support with public deployment; the sign-in fix
+for pasted passwords; the switch to an administrator-chosen password; and this
+updated report. Each commit was pushed after the tests passed.
 
 
 CHAPTER 9: CONCLUSION AND FUTURE SCOPE
@@ -527,52 +542,48 @@ CHAPTER 9: CONCLUSION AND FUTURE SCOPE
 9.1 Conclusion
 
 CircularSync shows that the disorder of campus communication can be reduced
-substantially with a modest, well-structured program. A light header block
-turns announcements into data that can be validated, ranked and queried. The
-WatchService makes ingestion automatic; an ExecutorService fed by a bounded
-BlockingQueue processes many circulars at once without blocking the watcher;
-concurrent collections and a read-write lock keep the registry consistent; and
-a TreeSet and a PriorityQueue order notices by priority and by deadline. The
-abstract Notice class, its subclasses and the Processable interface keep shared
-logic in one place while letting each category define its own ranking and
-presentation. Checked exceptions and try-with-resources make every failure
-visible and every resource safe. The tests and live runs confirm correct
-behaviour under normal operation, concurrent load and malformed, expired,
-edited and deleted input.
+substantially with a well-structured program. It accepts circulars in the PDF
+and Word formats in which they are actually published, reads free-form letters
+with transparent heuristics, and turns them into data that can be validated,
+ranked and queried. The WatchService makes ingestion automatic; an
+ExecutorService fed by a bounded BlockingQueue processes many circulars at
+once; concurrent collections and a read-write lock keep the registry
+consistent; and a TreeSet and a PriorityQueue order notices by priority and by
+deadline. The abstract Notice class and its four subclasses show how
+inheritance and overriding let a new category be added without touching the
+pipeline. Checked exceptions, try-with-resources and layered validation make
+every failure visible and every resource safe, and the password-protected web
+portal makes the results available to anyone, on any device, while keeping
+changes in trusted hands.
 
-9.2 Campus Integration
+9.2 Future Scope
 
-Because the directory is the integration point, adapters can be added
-independently: one reading a dedicated email inbox and saving attachments, one
-publishing the board as a web page or JSON feed for the college portal. A
-preprocessing stage applying optical character recognition to scanned PDFs and
-proposing a header block for confirmation would bring legacy circulars into the
-system, and a lightweight classifier could suggest TYPE and PRIORITY_KEYS
-values.
+The most valuable extension is optical character recognition, so that scanned
+circulars can be read; a preprocessing stage could also let an administrator
+confirm inferred fields before publication. The structuring heuristics could
+be complemented by a trained classifier, with the current rules kept as an
+explainable fallback. An adapter reading a dedicated email inbox would remove
+even the upload step.
 
-9.3 Mobile Notification Hooks
+The daemon's processing events already drive the portal and could equally
+call a push-notification service or a messaging group. Combined with student
+profiles recording branch, year and club memberships, notifications could be
+targeted, and reminders sent automatically when a deadline enters a configured
+window. Individual accounts would also allow several administrators with their
+own passwords instead of one shared password.
 
-The daemon's index listeners currently print to the console, but the same hook
-can call a push-notification service, a messaging group or a campus app.
-Combined with student profiles recording branch, year and club memberships,
-notifications could be targeted, and reminders could be sent automatically
-when a deadline enters a configured window.
+For scalability, uploaded circulars and the registry could be stored in a
+database or object store so that they survive redeployment on free hosting
+tiers, with the in-memory structures acting as a cache. Because workers share
+only the queue and the registry, the local queue could be replaced by a message
+broker to spread processing across machines.
 
-9.4 Scalability
+9.3 Closing Remarks
 
-For one college the in-memory registry is ample. For a university with many
-affiliated colleges, a database could back the registry with the in-memory
-structures as a cache. Because workers share only the queue and the registry,
-the local queue could be replaced by a message broker to distribute processing
-across machines, and the watcher could monitor one directory per issuing office
-to attribute circulars to their source.
-
-9.5 Closing Remarks
-
-The project met its objectives using only standard Java. It is small enough to
-understand completely and complete enough to use, and it changes the question a
-student must answer from where the information is to what needs to be done
-next.
+The project met its objectives with standard Java and a single, verified
+dependency. It is small enough to understand completely and complete enough to
+use, and it changes the question a student must answer from where the
+information is to what needs to be done next.
 
 
 REFERENCES
@@ -588,7 +599,10 @@ Reusable Object-Oriented Software. Addison-Wesley, 1994.
 Oracle Corporation. The Java Tutorials: Watching a Directory for Changes.
 
 Oracle Corporation. Java Platform, Standard Edition 17 API Specification,
-packages java.nio.file and java.util.concurrent.
+packages java.nio.file, java.util.concurrent and com.sun.net.httpserver.
 
-Gosling, J. et al. The Java Language Specification, Java SE 17 Edition,
-Chapter 17: Threads and Locks.
+The Apache Software Foundation. Apache PDFBox 3.0 Documentation.
+
+ECMA International. ECMA-376, Office Open XML File Formats, Part 1.
+
+OWASP Foundation. XML External Entity Prevention Cheat Sheet.
